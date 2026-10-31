@@ -180,6 +180,7 @@ When asked to build something, check which roadmap step it belongs to. Don't int
 
 ## How Claude should work in this repo
 
+- At the start of a session, read `docs/progress.md` to see where the project stands. At the end of each piece of work, update it (status table, decisions, open questions).
 - Before writing code, briefly state which service(s) are affected and whether any hard rule is involved.
 - Keep changes scoped to the service being worked on. If a change requires touching another service's contract (API or event), say so explicitly and update the docs here.
 - Add or update tests with every change: unit tests for logic, and at least one test covering the happy path of new endpoints or consumers.
