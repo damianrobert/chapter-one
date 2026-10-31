@@ -14,5 +14,10 @@ class Settings(BaseSettings):
     port: int = 8001  # env: PORT
     log_level: str = "INFO"  # env: LOG_LEVEL
 
+    # env: DATABASE_URL, e.g. postgresql+asyncpg://user:pass@catalog-db:5432/catalog_db
+    # No default on purpose: a missing DB URL should crash at startup, not silently
+    # point at some guessed host.
+    database_url: str
+
 
 settings = Settings()
