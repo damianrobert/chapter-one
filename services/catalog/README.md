@@ -24,3 +24,8 @@ python -m app          # http://localhost:8001/health/live
 pytest
 ruff check . && ruff format --check .
 ```
+
+## Run with Docker
+
+From the repo root: `docker compose up --build catalog`. The image is `chapter-one/catalog`
+and runs as non-root (UID 10001).
