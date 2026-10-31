@@ -4,6 +4,9 @@
 # Lets tests do `from app.main import app` without installing the package.
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "db: needs a real Postgres (started in Docker via testcontainers); skip with -m 'not db'",
+]
 
 [tool.ruff]
 line-length = 100

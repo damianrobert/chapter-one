@@ -6,7 +6,7 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 ## Current status
 
 - **Roadmap step:** 1 — Catalog service alone, with PostgreSQL, in Docker Compose
-- **Next piece:** 6 — Catalog book API
+- **Next piece:** 7 — Structured JSON logging
 - **Last updated:** 2026-10-31
 
 ## Step 1 — Catalog service
@@ -18,8 +18,8 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 | 3  | Multi-stage non-root Dockerfile, `docker-compose.yml`                 | done    | `0b0c58d` |
 | 4  | Postgres (`catalog_db`), SQLAlchemy async engine, `/health/ready`     | done    | `39729de` |
 | 5  | Alembic migrations, `books` table, seed data, migrate on startup      | done    | `5c1ecf5` |
-| 6  | `GET /books` (search, pagination), `GET /books/{id}`, `POST /books`, DB-backed tests | next |  |
-| 7  | Structured JSON logging (planned)                                     | planned |           |
+| 6  | `GET /books` (search, pagination), `GET /books/{id}`, `POST /books`, DB-backed tests | done |  |
+| 7  | Structured JSON logging                                               | next    |           |
 
 ## Decisions made along the way
 
@@ -34,14 +34,20 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   `docker compose exec catalog-db psql -U catalog -d catalog_db`.
 - Book `author` is a plain column for now (no authors table).
 - Seed data lives in migration `0002`, with fixed ids `11111111-1111-4111-8111-00000000000N`.
+- Catalog uses SQLAlchemy **Core** (table descriptions + queries), not the ORM, so the
+  SQL stays visible. `app/tables.py` describes tables; migrations remain the source of truth.
+- API JSON is camelCase (`priceMinor`), matching the event envelope style.
+- Validation errors return 400 `VALIDATION_ERROR` with per-field `details`; DB
+  unreachable returns 503 `DATABASE_UNAVAILABLE`.
+- Book search is a simple case-insensitive `ILIKE` on title/author (fine for a small
+  catalog; full-text search could come later).
+- DB-backed tests use **testcontainers** (throwaway Postgres, real migrations); marked
+  `db`, skip with `pytest -m "not db"`.
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 
 ## Open questions / planned
 
-- Piece 6 plans to use **testcontainers** (throwaway Postgres per test run) for
-  DB-backed tests. Not yet confirmed.
 - Structured JSON logs: CLAUDE.md requires them from day one, but logs are still
   uvicorn/alembic plain text. Planned as piece 7 of step 1.
-- Local dev machine needs `sudo apt install python3.12-venv` to create virtualenvs;
-  until then tests run in a throwaway `python:3.12-slim` container.
+- `POST /books` has no auth yet; the gateway (step 2) will decide who may create books.

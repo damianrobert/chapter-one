@@ -4,8 +4,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app import db
+from app import books, db
 from app.config import settings
+from app.errors import register_error_handlers
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Chapter One — Catalog", lifespan=lifespan)
+register_error_handlers(app)
+app.include_router(books.router)
 
 
 @app.get("/health/live")
