@@ -29,6 +29,20 @@ pytest
 ruff check . && ruff format --check .
 ```
 
+## Database migrations
+
+Alembic, hand-written migrations in `migrations/versions/`. The container runs
+`alembic upgrade head` on startup (`docker-entrypoint.sh`). `0002` seeds 6 demo books
+with fixed ids `11111111-1111-4111-8111-00000000000N` (N = 1..6).
+
+```bash
+docker compose exec catalog alembic current            # applied revision
+docker compose exec catalog alembic downgrade -1       # undo the last one
+```
+
+New migration: add `migrations/versions/000N_<name>.py` with `revision = "000N"` and
+`down_revision` pointing at the previous one, then rebuild.
+
 ## Run with Docker
 
 From the repo root: `docker compose up --build catalog`. The image is `chapter-one/catalog`

@@ -1,0 +1,53 @@
+# Local runtime for Chapter One. `docker compose up --build` starts the whole system.
+# Values like ${CATALOG_PORT} come from .env (copy .env.example); the part after ":-"
+# is the default used when the variable isn't set, so it also works without a .env.
+
+name: chapter-one
+
+services:
+  catalog:
+    build: ./services/catalog
+    image: chapter-one/catalog
+    environment:
+      PORT: 8001
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # "catalog-db" is the Compose service name below; Docker's DNS resolves it.
+      DATABASE_URL: postgresql+asyncpg://${CATALOG_DB_USER:-catalog}:${CATALOG_DB_PASSWORD:-catalog}@catalog-db:5432/${CATALOG_DB_NAME:-catalog_db}
+    ports:
+      # host:container — the container always listens on 8001; the host port is configurable.
+      - "${CATALOG_PORT:-8001}:8001"
+    depends_on:
+      # Start catalog only once Postgres answers. Convenient locally, but Kubernetes has
+      # no equivalent — the service itself must cope with the DB being down (it does:
+      # it starts anyway and /health/ready reports 503 until the DB is reachable).
+      catalog-db:
+        condition: service_healthy
+    healthcheck:
+      # The slim image has no curl, so use Python's stdlib for the probe.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health/live', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # Catalog's own database. Only the catalog service gets these credentials
+  # (hard rule: no shared databases). No host port is published; to inspect it use
+  #   docker compose exec catalog-db psql -U catalog -d catalog_db
+  catalog-db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${CATALOG_DB_USER:-catalog}
+      POSTGRES_PASSWORD: ${CATALOG_DB_PASSWORD:-catalog}
+      POSTGRES_DB: ${CATALOG_DB_NAME:-catalog_db}
+    volumes:
+      # Postgres 18+ images expect the volume at /var/lib/postgresql (not .../data).
+      - catalog-db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  # Named volume: data survives `docker compose down`; `down -v` deletes it.
+  catalog-db-data:

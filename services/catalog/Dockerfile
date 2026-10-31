@@ -32,13 +32,17 @@ RUN groupadd --system --gid 10001 app \
 
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
+COPY alembic.ini ./
+COPY migrations ./migrations
 COPY app ./app
+COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 USER 10001
 
 EXPOSE 8001
 
-# Exec form (JSON array) makes python PID 1, so it receives SIGTERM directly from
-# `docker stop` / Kubernetes and uvicorn can shut down gracefully. The shell form
-# (`CMD python -m app`) would wrap it in /bin/sh, which doesn't forward signals.
+# The entrypoint runs migrations, then `exec`s the CMD. Exec form (JSON array) for
+# both means no extra shell stays around: python ends up as PID 1, receives SIGTERM
+# directly from `docker stop` / Kubernetes, and uvicorn can shut down gracefully.
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["python", "-m", "app"]

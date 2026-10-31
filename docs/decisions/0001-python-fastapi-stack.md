@@ -21,7 +21,7 @@ and the focus stays on microservices concepts, not on switching tools.
 | Redis (cart)       | redis-py (async)                         | Official client                                          |
 | RabbitMQ           | aio-pika                                 | Async AMQP client with explicit acks                     |
 | Outbound HTTP      | httpx                                    | Async, supports per-request timeouts                     |
-| Tests              | pytest + httpx test client               | Simple, widely used                                      |
+| Tests              | pytest + FastAPI TestClient (httpx2)     | Simple, widely used                                      |
 | Lint / format      | ruff                                     | One fast tool for both                                   |
 | Dependencies       | pip + `requirements.txt` per service     | No extra tooling to learn; works the same in Docker      |
 
