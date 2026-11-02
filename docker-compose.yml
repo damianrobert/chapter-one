@@ -5,6 +5,22 @@
 name: chapter-one
 
 services:
+  # The front door: the frontend (and you, with curl) talk to this one.
+  gateway:
+    build: ./services/gateway
+    image: chapter-one/gateway
+    environment:
+      PORT: 8000
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
   catalog:
     build: ./services/catalog
     image: chapter-one/catalog
