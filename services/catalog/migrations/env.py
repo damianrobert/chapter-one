@@ -5,16 +5,21 @@ recipe: open an async connection, then hand Alembic a sync view of it via run_sy
 """
 
 import asyncio
-from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
+from app.logging_config import configure_logging
 
 config = context.config
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+
+# Migrations run in the container before the app starts (docker-entrypoint.sh), so
+# their logs ("Running upgrade 0001 -> 0002") go to the same JSON stdout as the app.
+# Code that runs migrations itself (our tests) can opt out by setting
+# config.attributes["configure_logger"] = False — a recipe from the Alembic docs.
+if config.attributes.get("configure_logger", True):
+    configure_logging(settings.log_level, settings.service_name)
 
 # We write migrations by hand (no ORM models to autogenerate from), so no metadata.
 target_metadata = None

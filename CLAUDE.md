@@ -149,7 +149,9 @@ chapter-one/
 ├── deploy/
 │   └── k8s/           # added later
 └── docs/
-    └── decisions/     # short ADRs for notable design choices
+    ├── progress.md    # where the project stands
+    ├── decisions/     # short ADRs for notable design choices
+    └── learning/      # plain-language guide per roadmap step
 ```
 
 Each service folder contains its own source, tests, Dockerfile, migrations (if it has a DB) and a short README with its endpoints.
@@ -181,6 +183,7 @@ When asked to build something, check which roadmap step it belongs to. Don't int
 ## How Claude should work in this repo
 
 - At the start of a session, read `docs/progress.md` to see where the project stands. At the end of each piece of work, update it (status table, decisions, open questions).
+- At the end of each roadmap step, write a plain-language learning guide in `docs/learning/step-N-<topic>.md`: what was built, how a request flows through it, why each piece was built that way, where to find things, and a few self-check questions with answers. See `docs/learning/step-1-catalog.md` for the format.
 - Before writing code, briefly state which service(s) are affected and whether any hard rule is involved.
 - Keep changes scoped to the service being worked on. If a change requires touching another service's contract (API or event), say so explicitly and update the docs here.
 - Add or update tests with every change: unit tests for logic, and at least one test covering the happy path of new endpoints or consumers.

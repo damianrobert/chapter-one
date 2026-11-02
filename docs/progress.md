@@ -5,9 +5,9 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 
 ## Current status
 
-- **Roadmap step:** 1 — Catalog service alone, with PostgreSQL, in Docker Compose
-- **Next piece:** 7 — Structured JSON logging
-- **Last updated:** 2026-10-31
+- **Roadmap step:** 1 complete → next is 2 (API gateway + Cart service with Redis)
+- **Next piece:** step 2 planning — split into pieces (gateway skeleton first)
+- **Last updated:** 2026-11-02
 
 ## Step 1 — Catalog service
 
@@ -18,8 +18,10 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 | 3  | Multi-stage non-root Dockerfile, `docker-compose.yml`                 | done    | `0b0c58d` |
 | 4  | Postgres (`catalog_db`), SQLAlchemy async engine, `/health/ready`     | done    | `39729de` |
 | 5  | Alembic migrations, `books` table, seed data, migrate on startup      | done    | `5c1ecf5` |
-| 6  | `GET /books` (search, pagination), `GET /books/{id}`, `POST /books`, DB-backed tests | done |  |
-| 7  | Structured JSON logging                                               | next    |           |
+| 6  | `GET /books` (search, pagination), `GET /books/{id}`, `POST /books`, DB-backed tests | done | `5716d1e` |
+| 7  | Structured JSON logging (app, uvicorn, alembic), request-log middleware | done  |           |
+
+Learning guide for this step: `docs/learning/step-1-catalog.md`.
 
 ## Decisions made along the way
 
@@ -43,11 +45,18 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   catalog; full-text search could come later).
 - DB-backed tests use **testcontainers** (throwaway Postgres, real migrations); marked
   `db`, skip with `pytest -m "not db"`.
+- JSON logging uses only the stdlib (`JsonFormatter` in `app/logging_config.py`, no
+  extra library). Log field names are camelCase like the API (`durationMs`). Uvicorn's
+  text access log is off (`access_log=False`); a middleware logs each request instead.
+  Health-check requests log at DEBUG. Tests opt out of Alembic's logging setup via
+  `config.attributes["configure_logger"] = False` so pytest keeps capturing logs.
+  When more services exist, this file is a candidate for `shared/` (it's a "tiny
+  helper", not business logic) — decide then.
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 
 ## Open questions / planned
 
-- Structured JSON logs: CLAUDE.md requires them from day one, but logs are still
-  uvicorn/alembic plain text. Planned as piece 7 of step 1.
+- Correlation IDs in log lines: the JSON format is ready (add a `correlationId` field);
+  wiring it up is roadmap step 6.
 - `POST /books` has no auth yet; the gateway (step 2) will decide who may create books.

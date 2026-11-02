@@ -1,4 +1,5 @@
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -9,6 +10,7 @@ from app.config import settings
 from app.errors import register_error_handlers
 
 logger = logging.getLogger(__name__)
+request_logger = logging.getLogger("app.requests")
 
 
 @asynccontextmanager
@@ -24,6 +26,36 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Chapter One — Catalog", lifespan=lifespan)
 register_error_handlers(app)
 app.include_router(books.router)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log one JSON line per request: method, path, status and duration.
+
+    A middleware wraps every request, so this is the one place that sees all of
+    them. Error responses (404, 400, 503) are already turned into normal responses
+    by our error handlers before they get here, so they're logged with their status.
+    """
+    start = time.perf_counter()
+    status = 500  # used if the endpoint crashes with an error nobody handled
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        # Health checks run every few seconds (Docker, later Kubernetes probes).
+        # Log them at DEBUG so they don't drown out real traffic at the INFO level.
+        level = logging.DEBUG if request.url.path.startswith("/health/") else logging.INFO
+        request_logger.log(
+            level,
+            "request completed",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status": status,
+                "durationMs": round((time.perf_counter() - start) * 1000, 1),
+            },
+        )
 
 
 @app.get("/health/live")

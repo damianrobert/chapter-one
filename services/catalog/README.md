@@ -30,8 +30,22 @@ Errors look like `{"error": {"code": "...", "message": "..."}}`: 400 `VALIDATION
 | Variable       | Default    | Description                                              |
 |----------------|------------|----------------------------------------------------------|
 | `PORT`         | `8001`     | HTTP port                                                |
-| `LOG_LEVEL`    | `INFO`     | Log level                                                |
+| `LOG_LEVEL`    | `INFO`     | Log level (`DEBUG` also shows health-check requests)     |
 | `DATABASE_URL` | (required) | `postgresql+asyncpg://user:pass@host:5432/catalog_db`    |
+
+## Logs
+
+One JSON object per line on stdout (`app/logging_config.py`): app, uvicorn and
+migration logs alike. Each request produces a `request completed` line:
+
+```json
+{"timestamp": "2026-11-02T08:06:54.721Z", "level": "INFO", "service": "catalog",
+ "logger": "app.requests", "message": "request completed", "method": "GET",
+ "path": "/books", "status": 200, "durationMs": 19.0}
+```
+
+Health-check requests are logged at `DEBUG` so probes don't flood the logs. Filter with
+e.g. `docker compose logs catalog --no-log-prefix | jq 'select(.status >= 400)'`.
 
 ## Run locally
 

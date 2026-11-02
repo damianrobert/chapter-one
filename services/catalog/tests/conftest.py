@@ -42,6 +42,8 @@ def database_url():
         # URL from settings, so point settings at the test DB while migrating.
         alembic_cfg = Config(str(SERVICE_DIR / "alembic.ini"))
         alembic_cfg.set_main_option("script_location", str(SERVICE_DIR / "migrations"))
+        # Leave logging to pytest (it captures logs itself); see migrations/env.py.
+        alembic_cfg.attributes["configure_logger"] = False
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(settings, "database_url", url)
             command.upgrade(alembic_cfg, "head")
