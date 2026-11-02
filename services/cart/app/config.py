@@ -17,5 +17,9 @@ class Settings(BaseSettings):
     # can't do anything, so it should fail at startup rather than on every request.
     redis_url: str
 
+    # env: CATALOG_URL, e.g. http://catalog:8001. The cart asks catalog whether a book
+    # exists and what it costs. Required for the same reason as REDIS_URL.
+    catalog_url: str
+
 
 settings = Settings()

@@ -6,7 +6,7 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 ## Current status
 
 - **Roadmap step:** 2 in progress (API gateway + Cart service with Redis)
-- **Next piece:** step 2, piece 4 — cart endpoints (add/remove/list, TTL, catalog check)
+- **Next piece:** step 2, piece 5 — gateway forwards `/api/carts...` to cart
 - **Last updated:** 2026-11-02
 
 ## Step 1 — Catalog service
@@ -29,8 +29,8 @@ Learning guide for this step: `docs/learning/step-1-catalog.md`.
 |----|-----------------------------------------------------------------------|---------|-----------|
 | 1  | Gateway skeleton: health checks, JSON logs, error shape, Dockerfile, Compose | done | `ec12993` |
 | 2  | Gateway forwards `/api/books...` to catalog (timeout, retry on GET, 503 if down) | done | `a4d9f74` |
-| 3  | Cart service skeleton with Redis (health checks, Compose)             | done    |           |
-| 4  | Cart endpoints (add/remove/list, 7-day TTL), book check + price via catalog | todo |        |
+| 3  | Cart service skeleton with Redis (health checks, Compose)             | done    | `2e9e915` |
+| 4  | Cart endpoints (add/remove/list, 7-day TTL), book check + price via catalog | done |        |
 | 5  | Gateway forwards `/api/carts...` to cart                              | todo    |           |
 | 6  | JWT validation at the gateway, forwards `X-User-ID`                   | todo    |           |
 | 7  | Learning guide `docs/learning/step-2-gateway-cart.md`                 | todo    |           |
@@ -88,8 +88,25 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   `decode_responses=True`. `/health/ready` checks Redis only (not catalog, same reasoning
   as the gateway).
 - Cart health tests use a tiny `FakeRedis` (happy path) and a real client pointed at a
-  closed port (503 path) — no Redis container needed yet. Piece 4 will decide whether
-  endpoint tests use testcontainers Redis, like catalog's DB tests.
+  closed port (503 path). Cart API tests use a **testcontainers Redis** (marker `redis`,
+  skip with `-m "not redis"`) and fake catalog with httpx2's `MockTransport`.
+- Cart API: `GET /carts/{userId}`, `PUT /carts/{userId}/items/{bookId}` (**sets** the
+  quantity 1–99, so repeating it is safe), `DELETE .../items/{bookId}` (204 even if the
+  book wasn't there). No "clear cart" endpoint yet: clearing on `OrderConfirmed` comes
+  with the events in step 4/5.
+- Cart storage: one Redis hash per cart (`cart:<userId>`, field per book holding a JSON
+  snapshot of title/author/price/currency + quantity). HSET/HDEL and EXPIRE run together
+  in MULTI/EXEC; every change resets the 7-day TTL. Reading doesn't reset it.
+- Cart **copies** title and price from catalog on every PUT; it can go stale if catalog
+  changes a price later. Accepted for now; order (step 3) copies the cart's price at
+  checkout. Revisit if "price changed since you added it" matters.
+- One currency per cart: a book in a different currency → 409 `CURRENCY_MISMATCH`, so
+  the cart has one `totalMinor` + `currency`. The check is read-then-write; two
+  simultaneous requests from the same user could both pass (accepted, single user).
+- Cart → catalog calls (`app/catalog_client.py`): 2s timeout, 3 attempts on network
+  errors, catalog 404 → cart 404 `BOOK_NOT_FOUND`, any other non-200 or no answer →
+  503 `CATALOG_UNAVAILABLE`. GET/DELETE don't call catalog, so they work while it's down.
+  Redis unreachable → 503 `DATABASE_UNAVAILABLE` (same code as catalog's DB).
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 
@@ -98,3 +115,7 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 - Correlation IDs in log lines: the JSON format is ready (add a `correlationId` field);
   wiring it up is roadmap step 6.
 - `POST /books` has no auth yet; the gateway (step 2) will decide who may create books.
+- Cart trusts the `userId` in the path for now. Piece 6 (JWT) must make sure a user can
+  only reach their own cart (gateway checks the path's userId matches `X-User-ID`, or
+  cart reads `X-User-ID` instead) — decide then.
+- Cart doesn't forward a correlation ID to catalog yet (roadmap step 6).

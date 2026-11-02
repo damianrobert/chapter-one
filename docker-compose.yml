@@ -78,13 +78,19 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # "cart-redis" is the Compose service below; "/0" is Redis database number 0.
       REDIS_URL: redis://cart-redis:6379/0
+      # The cart asks catalog whether a book exists and what it costs.
+      CATALOG_URL: http://catalog:8001
     ports:
       - "${CART_PORT:-8002}:8002"
     # Like catalog: start once Redis answers. The cart copes with Redis being down
     # anyway (/health/ready reports 503 until it's back).
+    # Catalog: only "started", not "healthy" — the cart must cope with catalog being
+    # down anyway (adding books answers 503; reading/removing still works).
     depends_on:
       cart-redis:
         condition: service_healthy
+      catalog:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health/live', timeout=2)"]
       interval: 10s

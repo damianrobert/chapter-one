@@ -4,6 +4,9 @@
 # Lets tests do `from app.main import app` without installing the package.
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "redis: needs a real Redis (started in Docker via testcontainers); skip with -m 'not redis'",
+]
 
 [tool.ruff]
 line-length = 100

@@ -4,3 +4,6 @@ uvicorn[standard]==0.54.0
 pydantic-settings==2.16.2
 # Official Redis client; `redis.asyncio` is its async version.
 redis==8.1.0
+# HTTP client for calling catalog (same library as the gateway; FastAPI's TestClient
+# uses it too).
+httpx2==2.16.0

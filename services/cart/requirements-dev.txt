@@ -1,6 +1,6 @@
 # Development-only dependencies (tests, lint) — NOT installed in the Docker image
 pytest==9.2.0
-# FastAPI's TestClient needs httpx2. (The cart will need it at runtime in the next
-# piece to call catalog; then it moves to requirements.txt.)
-httpx2==2.16.0
+# httpx2 (used by FastAPI's TestClient) is already in requirements.txt
 ruff==0.17.3
+# Starts a throwaway Redis container for the cart API tests (needs Docker running)
+testcontainers[redis]==4.15.0

@@ -1,7 +1,8 @@
 """The cart service: what each user has put in their cart, stored in Redis.
 
-This file is the skeleton: health checks, request logging and the Redis client.
-The cart endpoints (add / remove / list items) come in the next piece.
+This file wires things together: Redis and HTTP clients, health checks, request
+logging. The cart endpoints are in app/carts.py; calls to catalog in
+app/catalog_client.py.
 """
 
 import logging
@@ -11,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app import redis_client
+from app import carts, catalog_client, redis_client
 from app.config import settings
 from app.errors import register_error_handlers
 
@@ -21,15 +22,19 @@ request_logger = logging.getLogger("app.requests")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: one Redis client for the whole service (it keeps a pool of connections).
+    # Startup: one Redis client and one HTTP client for the whole service. Both keep
+    # a pool of open connections that all requests share.
     app.state.redis = redis_client.create_client(settings.redis_url)
+    app.state.http_client = catalog_client.create_client()
     yield
     # Shutdown (e.g. SIGTERM): runs after in-flight requests finished; close connections.
+    await app.state.http_client.aclose()
     await app.state.redis.aclose()
 
 
 app = FastAPI(title="Chapter One — Cart", lifespan=lifespan)
 register_error_handlers(app)
+app.include_router(carts.router)
 
 
 @app.middleware("http")
