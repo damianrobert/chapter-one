@@ -6,7 +6,7 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 ## Current status
 
 - **Roadmap step:** 2 in progress (API gateway + Cart service with Redis)
-- **Next piece:** step 2, piece 2 — gateway forwards `/api/books...` to catalog
+- **Next piece:** step 2, piece 3 — cart service skeleton with Redis
 - **Last updated:** 2026-11-02
 
 ## Step 1 — Catalog service
@@ -27,8 +27,8 @@ Learning guide for this step: `docs/learning/step-1-catalog.md`.
 
 | #  | Piece                                                                 | Status  | Commit    |
 |----|-----------------------------------------------------------------------|---------|-----------|
-| 1  | Gateway skeleton: health checks, JSON logs, error shape, Dockerfile, Compose | done |       |
-| 2  | Gateway forwards `/api/books...` to catalog (timeout, retry on GET, 503 if down) | todo |  |
+| 1  | Gateway skeleton: health checks, JSON logs, error shape, Dockerfile, Compose | done | `ec12993` |
+| 2  | Gateway forwards `/api/books...` to catalog (timeout, retry on GET, 503 if down) | done |  |
 | 3  | Cart service skeleton with Redis (health checks, Compose)             | todo    |           |
 | 4  | Cart endpoints (add/remove/list, 7-day TTL), book check + price via catalog | todo |        |
 | 5  | Gateway forwards `/api/carts...` to cart                              | todo    |           |
@@ -70,6 +70,16 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 - Gateway `/health/ready` does **not** check catalog/cart: otherwise one broken
   service would make the whole gateway "not ready" and cut off every route. The
   gateway answers 503 only on routes whose service is down.
+- HTTP client is **`httpx2`** (successor of `httpx`, same API), used both at runtime
+  and by FastAPI's TestClient, so services need only one HTTP library. CLAUDE.md's
+  stack list still says "httpx"; it means this.
+- Gateway forwarding (`services/gateway/app/proxy.py`): 2s timeout per call; retries
+  (3 attempts, backoff 0.2s/0.4s) only for GET/HEAD/OPTIONS and only on network
+  errors; unreachable → 503 `SERVICE_UNAVAILABLE`; service answers (incl. errors)
+  pass through unchanged. Only `content-type`/`accept` go to the service and only
+  `content-type`/`location` come back; `Location` gets the `/api` prefix.
+- Gateway routes by prefix (`/api/books*` → catalog) without knowing catalog's
+  individual endpoints; catalog itself answers 404/405.
 - Gateway listens on port 8000 (catalog 8001; later services continue 8002, 8003...).
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).

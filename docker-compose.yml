@@ -12,8 +12,14 @@ services:
     environment:
       PORT: 8000
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Where to forward /api/books. "catalog" is resolved by Docker's DNS.
+      CATALOG_URL: http://catalog:8001
     ports:
       - "${GATEWAY_PORT:-8000}:8000"
+    # Only "start after catalog has started", NOT "wait until healthy": the gateway
+    # must cope with catalog being down anyway (it answers 503 for book requests).
+    depends_on:
+      - catalog
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=2)"]
       interval: 10s

@@ -4,22 +4,34 @@ The frontend only ever talks to the gateway. The gateway decides which service
 handles a request (routing), and later checks who the user is (JWT) and adds a
 correlation ID. Services behind it stay simple and never face the internet directly.
 
-This piece is only the skeleton: health checks, JSON logs and error format.
-Routing to catalog comes in the next piece.
+The routing table is in app/routes.py; how a request is forwarded is in app/proxy.py.
 """
 
 import logging
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 
+from app import proxy, routes
 from app.config import settings
 from app.errors import register_error_handlers
 
 request_logger = logging.getLogger("app.requests")
 
-app = FastAPI(title="Chapter One — API Gateway")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: one HTTP client, shared by all requests (it reuses connections).
+    app.state.http_client = proxy.create_client()
+    yield
+    # Shutdown (e.g. SIGTERM): runs after in-flight requests finished; close connections.
+    await app.state.http_client.aclose()
+
+
+app = FastAPI(title="Chapter One — API Gateway", lifespan=lifespan)
 register_error_handlers(app)
+app.include_router(routes.router)
 
 
 @app.middleware("http")
@@ -66,5 +78,5 @@ async def ready() -> dict:
     # "not ready" and Kubernetes would stop sending it ANY traffic — so cart and order
     # would become unreachable too, just because catalog is down. One broken service
     # would take everything down with it. Instead, the gateway stays up and answers
-    # 503 only for requests that need the broken service (next piece).
+    # 503 only for requests that need the broken service (see app/proxy.py).
     return {"status": "ok", "checks": {}}
