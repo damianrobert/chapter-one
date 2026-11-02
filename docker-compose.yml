@@ -70,6 +70,43 @@ services:
       timeout: 3s
       retries: 10
 
+  cart:
+    build: ./services/cart
+    image: chapter-one/cart
+    environment:
+      PORT: 8002
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # "cart-redis" is the Compose service below; "/0" is Redis database number 0.
+      REDIS_URL: redis://cart-redis:6379/0
+    ports:
+      - "${CART_PORT:-8002}:8002"
+    # Like catalog: start once Redis answers. The cart copes with Redis being down
+    # anyway (/health/ready reports 503 until it's back).
+    depends_on:
+      cart-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health/live', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # Cart's own Redis. Only the cart service gets its address (hard rule: no shared
+  # databases). No host port is published; to inspect it use
+  #   docker compose exec cart-redis redis-cli
+  cart-redis:
+    image: redis:8-alpine
+    volumes:
+      # Redis saves a snapshot to /data now and then, so carts survive a restart.
+      - cart-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
-  # Named volume: data survives `docker compose down`; `down -v` deletes it.
+  # Named volumes: data survives `docker compose down`; `down -v` deletes it.
   catalog-db-data:
+  cart-redis-data:

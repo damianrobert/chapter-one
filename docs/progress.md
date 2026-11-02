@@ -6,7 +6,7 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 ## Current status
 
 - **Roadmap step:** 2 in progress (API gateway + Cart service with Redis)
-- **Next piece:** step 2, piece 3 — cart service skeleton with Redis
+- **Next piece:** step 2, piece 4 — cart endpoints (add/remove/list, TTL, catalog check)
 - **Last updated:** 2026-11-02
 
 ## Step 1 — Catalog service
@@ -28,8 +28,8 @@ Learning guide for this step: `docs/learning/step-1-catalog.md`.
 | #  | Piece                                                                 | Status  | Commit    |
 |----|-----------------------------------------------------------------------|---------|-----------|
 | 1  | Gateway skeleton: health checks, JSON logs, error shape, Dockerfile, Compose | done | `ec12993` |
-| 2  | Gateway forwards `/api/books...` to catalog (timeout, retry on GET, 503 if down) | done |  |
-| 3  | Cart service skeleton with Redis (health checks, Compose)             | todo    |           |
+| 2  | Gateway forwards `/api/books...` to catalog (timeout, retry on GET, 503 if down) | done | `a4d9f74` |
+| 3  | Cart service skeleton with Redis (health checks, Compose)             | done    |           |
 | 4  | Cart endpoints (add/remove/list, 7-day TTL), book check + price via catalog | todo |        |
 | 5  | Gateway forwards `/api/carts...` to cart                              | todo    |           |
 | 6  | JWT validation at the gateway, forwards `X-User-ID`                   | todo    |           |
@@ -81,6 +81,15 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 - Gateway routes by prefix (`/api/books*` → catalog) without knowing catalog's
   individual endpoints; catalog itself answers 404/405.
 - Gateway listens on port 8000 (catalog 8001; later services continue 8002, 8003...).
+- Cart listens on 8002 and uses its own Redis (`cart-redis`, image `redis:8-alpine`, no
+  host port; inspect with `docker compose exec cart-redis redis-cli`). Redis keeps
+  snapshots in the `cart-redis-data` volume so carts survive a restart.
+- Cart's Redis client: `redis.asyncio` with 2s connect and 2s command timeouts,
+  `decode_responses=True`. `/health/ready` checks Redis only (not catalog, same reasoning
+  as the gateway).
+- Cart health tests use a tiny `FakeRedis` (happy path) and a real client pointed at a
+  closed port (503 path) — no Redis container needed yet. Piece 4 will decide whether
+  endpoint tests use testcontainers Redis, like catalog's DB tests.
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 

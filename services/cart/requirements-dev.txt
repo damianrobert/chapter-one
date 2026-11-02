@@ -1,0 +1,6 @@
+# Development-only dependencies (tests, lint) — NOT installed in the Docker image
+pytest==9.2.0
+# FastAPI's TestClient needs httpx2. (The cart will need it at runtime in the next
+# piece to call catalog; then it moves to requirements.txt.)
+httpx2==2.16.0
+ruff==0.17.3

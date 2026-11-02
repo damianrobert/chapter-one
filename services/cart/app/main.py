@@ -1,0 +1,83 @@
+"""The cart service: what each user has put in their cart, stored in Redis.
+
+This file is the skeleton: health checks, request logging and the Redis client.
+The cart endpoints (add / remove / list items) come in the next piece.
+"""
+
+import logging
+import time
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from app import redis_client
+from app.config import settings
+from app.errors import register_error_handlers
+
+logger = logging.getLogger(__name__)
+request_logger = logging.getLogger("app.requests")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: one Redis client for the whole service (it keeps a pool of connections).
+    app.state.redis = redis_client.create_client(settings.redis_url)
+    yield
+    # Shutdown (e.g. SIGTERM): runs after in-flight requests finished; close connections.
+    await app.state.redis.aclose()
+
+
+app = FastAPI(title="Chapter One — Cart", lifespan=lifespan)
+register_error_handlers(app)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log one JSON line per request: method, path, status and duration.
+
+    Same middleware as in catalog and gateway.
+    """
+    start = time.perf_counter()
+    status = 500  # used if the endpoint crashes with an error nobody handled
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        # Health checks run every few seconds; log them at DEBUG to keep INFO readable.
+        level = logging.DEBUG if request.url.path.startswith("/health/") else logging.INFO
+        request_logger.log(
+            level,
+            "request completed",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status": status,
+                "durationMs": round((time.perf_counter() - start) * 1000, 1),
+            },
+        )
+
+
+@app.get("/health/live")
+async def live() -> dict:
+    # Liveness: "is the process running?" No dependency checks — restarting the cart
+    # wouldn't fix a broken Redis.
+    return {"status": "ok", "service": settings.service_name}
+
+
+@app.get("/health/ready")
+async def ready(request: Request) -> JSONResponse:
+    # Readiness: "can I serve traffic right now?" The cart is useless without Redis,
+    # so Redis must answer. (Catalog is NOT checked here even though the cart will
+    # call it — same reasoning as the gateway: one broken service shouldn't mark
+    # others as not ready.)
+    try:
+        await redis_client.ping_redis(request.app.state.redis)
+    except Exception:
+        logger.warning("readiness check failed: redis unreachable", exc_info=True)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "checks": {"redis": "unreachable"}},
+        )
+    return JSONResponse(content={"status": "ok", "checks": {"redis": "ok"}})
