@@ -9,6 +9,7 @@ The gateway has no database. Its main config is the address of each service it
 forwards to.
 """
 
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -23,6 +24,10 @@ class Settings(BaseSettings):
     catalog_url: str
     # env: CART_URL, e.g. http://cart:8002. Required for the same reason.
     cart_url: str
+
+    # env: JWT_SECRET, the key that signs login tokens. No default, and it must be long
+    # enough that nobody can guess it.
+    jwt_secret: str = Field(min_length=32)
 
 
 settings = Settings()

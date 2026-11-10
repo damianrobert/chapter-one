@@ -8,10 +8,8 @@ them answer anything, or fail like a crashed service would, without any network.
 
 import httpx2
 import pytest
-from fastapi.testclient import TestClient
 
 from app import proxy
-from app.main import app
 
 
 @pytest.fixture(autouse=True)
@@ -20,26 +18,8 @@ def no_backoff_sleep(monkeypatch):
     monkeypatch.setattr(proxy, "BACKOFF_SECONDS", 0)
 
 
-@pytest.fixture
-def fake_service():
-    """Start the app with a fake service. `calls` records what the gateway sent."""
-    calls: list[httpx2.Request] = []
-    state = {"handler": lambda request: httpx2.Response(200, json={"ok": True})}
-
-    def transport_handler(request: httpx2.Request) -> httpx2.Response:
-        calls.append(request)
-        return state["handler"](request)
-
-    with TestClient(app) as client:
-        # Replace the real client created at startup with one that talks to our fake.
-        app.state.http_client = httpx2.AsyncClient(
-            transport=httpx2.MockTransport(transport_handler)
-        )
-
-        def set_handler(handler):
-            state["handler"] = handler
-
-        yield client, calls, set_handler
+USER_ID = "33333333-3333-4333-8333-000000000001"
+BOOK_ID = "11111111-1111-4111-8111-000000000001"
 
 
 def test_get_is_forwarded_with_api_prefix_stripped_and_query_kept(fake_service):
@@ -74,13 +54,13 @@ def test_catalog_errors_are_passed_through_unchanged(fake_service):
     assert response.json() == error
 
 
-def test_post_forwards_body_and_rewrites_location(fake_service):
+def test_post_forwards_body_and_rewrites_location(fake_service, auth_headers):
     client, calls, set_handler = fake_service
     set_handler(
         lambda request: httpx2.Response(201, json={"id": "abc"}, headers={"Location": "/books/abc"})
     )
 
-    response = client.post("/api/books", json={"title": "Emma"})
+    response = client.post("/api/books", json={"title": "Emma"}, headers=auth_headers(USER_ID))
 
     assert response.status_code == 201
     assert response.headers["location"] == "/api/books/abc"
@@ -116,13 +96,13 @@ def test_get_succeeds_if_a_retry_works(fake_service):
     assert len(calls) == 2
 
 
-def test_post_is_not_retried(fake_service):
+def test_post_is_not_retried(fake_service, auth_headers):
     # A failed POST might still have reached catalog; repeating it could create the
     # same book twice. So: one attempt only.
     client, calls, set_handler = fake_service
     set_handler(refuse_connection)
 
-    response = client.post("/api/books", json={"title": "Emma"})
+    response = client.post("/api/books", json={"title": "Emma"}, headers=auth_headers(USER_ID))
 
     assert response.status_code == 503
     assert len(calls) == 1
@@ -141,16 +121,12 @@ def test_timeout_counts_as_unavailable(fake_service):
     assert response.status_code == 503
 
 
-USER_ID = "33333333-3333-4333-8333-000000000001"
-BOOK_ID = "11111111-1111-4111-8111-000000000001"
-
-
-def test_cart_get_goes_to_the_cart_service(fake_service):
+def test_cart_get_goes_to_the_cart_service(fake_service, auth_headers):
     client, calls, set_handler = fake_service
     cart = {"userId": USER_ID, "items": []}
     set_handler(lambda request: httpx2.Response(200, json=cart))
 
-    response = client.get(f"/api/carts/{USER_ID}")
+    response = client.get(f"/api/carts/{USER_ID}", headers=auth_headers(USER_ID))
 
     assert response.status_code == 200
     assert response.json() == cart
@@ -158,10 +134,14 @@ def test_cart_get_goes_to_the_cart_service(fake_service):
     assert str(sent.url) == f"http://cart.test:8002/carts/{USER_ID}"
 
 
-def test_cart_put_forwards_the_body(fake_service):
+def test_cart_put_forwards_the_body(fake_service, auth_headers):
     client, calls, _ = fake_service
 
-    client.put(f"/api/carts/{USER_ID}/items/{BOOK_ID}", json={"quantity": 2})
+    client.put(
+        f"/api/carts/{USER_ID}/items/{BOOK_ID}",
+        json={"quantity": 2},
+        headers=auth_headers(USER_ID),
+    )
 
     [sent] = calls
     assert sent.method == "PUT"
@@ -169,22 +149,22 @@ def test_cart_put_forwards_the_body(fake_service):
     assert b'"quantity"' in sent.content
 
 
-def test_cart_delete_passes_on_an_empty_204(fake_service):
+def test_cart_delete_passes_on_an_empty_204(fake_service, auth_headers):
     client, calls, set_handler = fake_service
     set_handler(lambda request: httpx2.Response(204))
 
-    response = client.delete(f"/api/carts/{USER_ID}/items/{BOOK_ID}")
+    response = client.delete(f"/api/carts/{USER_ID}/items/{BOOK_ID}", headers=auth_headers(USER_ID))
 
     assert response.status_code == 204
     assert response.content == b""
     assert calls[0].method == "DELETE"
 
 
-def test_503_names_the_cart_service_when_it_is_down(fake_service):
+def test_503_names_the_cart_service_when_it_is_down(fake_service, auth_headers):
     client, _, set_handler = fake_service
     set_handler(refuse_connection)
 
-    response = client.get(f"/api/carts/{USER_ID}")
+    response = client.get(f"/api/carts/{USER_ID}", headers=auth_headers(USER_ID))
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "SERVICE_UNAVAILABLE"

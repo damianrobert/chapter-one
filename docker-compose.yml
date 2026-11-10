@@ -15,6 +15,9 @@ services:
       # Where to forward /api/books and /api/carts. Docker's DNS resolves these names.
       CATALOG_URL: http://catalog:8001
       CART_URL: http://cart:8002
+      # Signs login tokens. The default is only for local use; set a real one in .env.
+      # Only the gateway gets this (hard rule 8).
+      JWT_SECRET: ${JWT_SECRET:-local-development-only-secret-do-not-use-elsewhere}
     ports:
       - "${GATEWAY_PORT:-8000}:8000"
     # Only "start after they have started", NOT "wait until healthy": the gateway

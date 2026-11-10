@@ -10,10 +10,25 @@ routes each request to the right service. Later it also checks the user's login
 |--------|-----------------|------------------------------------------------------|
 | GET    | `/health/live`  | Process is up                                        |
 | GET    | `/health/ready` | Always ready once running (doesn't check other services — see `app/main.py`) |
-| any    | `/api/books`, `/api/books/...` | Forwarded to catalog as `/books...` (see catalog's README) |
-| any    | `/api/carts`, `/api/carts/...` | Forwarded to cart as `/carts...` (see cart's README) |
+| any    | `/api/books`, `/api/books/...` | Forwarded to catalog as `/books...` (see catalog's README). Reading is public; other methods need a login |
+| any    | `/api/carts/{userId}...` | Forwarded to cart as `/carts...` (see cart's README). Needs a login, and only your own cart |
 
 The routing table is `app/routes.py`.
+
+## Login tokens
+
+Send a JWT on each protected request: `Authorization: Bearer <token>`. The gateway checks it
+(`app/auth.py`) and tells the service who the user is with `X-User-ID`. An `X-User-ID` sent by
+the client is ignored.
+
+- No token, or an invalid or expired one: 401 `UNAUTHORIZED`.
+- Someone else's cart: 403 `FORBIDDEN`.
+
+There is no login page yet. To get a token that lasts one hour:
+
+```bash
+docker compose exec gateway python -m app.dev_token 33333333-3333-4333-8333-000000000001
+```
 
 How forwarding works (`app/proxy.py`):
 - Every call to a service has a **2s timeout**.
@@ -34,6 +49,7 @@ for unknown paths.
 | `LOG_LEVEL`   | `INFO`     | Log level                                 |
 | `CATALOG_URL` | (required) | Catalog's address, e.g. `http://catalog:8001` |
 | `CART_URL`    | (required) | Cart's address, e.g. `http://cart:8002`   |
+| `JWT_SECRET`  | (required) | Signs login tokens, at least 32 characters |
 
 ## Logs
 

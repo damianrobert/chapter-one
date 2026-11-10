@@ -5,3 +5,5 @@ pydantic-settings==2.16.2
 # HTTP client for calling the services. httpx2 is the successor of httpx (same API);
 # it's also what FastAPI's TestClient uses, so we only need one HTTP library.
 httpx2==2.16.0
+# Creating and checking login tokens (JWTs).
+PyJWT==2.15.1

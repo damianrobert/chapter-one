@@ -75,9 +75,17 @@ async def _send_with_retries(
 
 
 async def forward(
-    request: Request, client: httpx2.AsyncClient, service: str, base_url: str, path: str
+    request: Request,
+    client: httpx2.AsyncClient,
+    service: str,
+    base_url: str,
+    path: str,
+    user_id: str | None = None,
 ) -> Response:
-    """Send `request` to `base_url + path` and return the service's answer."""
+    """Send `request` to `base_url + path` and return the service's answer.
+
+    `user_id` is the logged-in user, if any, and is passed on as `X-User-ID`.
+    """
     url = base_url.rstrip("/") + path
     if request.url.query:
         url += "?" + request.url.query  # pass ?q=...&limit=... through unchanged
@@ -87,6 +95,10 @@ async def forward(
         for name in REQUEST_HEADERS_TO_FORWARD
         if name in request.headers
     }
+    # Services trust this header (hard rule 8), so only the gateway may set it. A value
+    # sent by the client is never copied, because it isn't in the list above.
+    if user_id is not None:
+        headers["X-User-ID"] = user_id
 
     try:
         upstream = await _send_with_retries(
