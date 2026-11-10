@@ -1,9 +1,9 @@
-"""Tests for forwarding requests to catalog.
+"""Tests for forwarding requests to the services behind the gateway.
 
-Instead of running a real catalog, the gateway's HTTP client is swapped for one with
+Instead of running real services, the gateway's HTTP client is swapped for one with
 a `MockTransport`. A MockTransport hands every outgoing request to a Python
-function we write, which plays the part of catalog. That way we can make "catalog"
-answer anything, or fail like a crashed service would, without any network.
+function we write, which plays the part of catalog or cart. That way we can make
+them answer anything, or fail like a crashed service would, without any network.
 """
 
 import httpx2
@@ -21,8 +21,8 @@ def no_backoff_sleep(monkeypatch):
 
 
 @pytest.fixture
-def fake_catalog():
-    """Start the app with a fake catalog. `calls` records what the gateway sent."""
+def fake_service():
+    """Start the app with a fake service. `calls` records what the gateway sent."""
     calls: list[httpx2.Request] = []
     state = {"handler": lambda request: httpx2.Response(200, json={"ok": True})}
 
@@ -42,8 +42,8 @@ def fake_catalog():
         yield client, calls, set_handler
 
 
-def test_get_is_forwarded_with_api_prefix_stripped_and_query_kept(fake_catalog):
-    client, calls, set_handler = fake_catalog
+def test_get_is_forwarded_with_api_prefix_stripped_and_query_kept(fake_service):
+    client, calls, set_handler = fake_service
     set_handler(lambda request: httpx2.Response(200, json={"items": [], "total": 0}))
 
     response = client.get("/api/books?q=austen&limit=5")
@@ -55,16 +55,16 @@ def test_get_is_forwarded_with_api_prefix_stripped_and_query_kept(fake_catalog):
     assert str(sent.url) == "http://catalog.test:8001/books?q=austen&limit=5"
 
 
-def test_path_below_books_is_forwarded(fake_catalog):
-    client, calls, _ = fake_catalog
+def test_path_below_books_is_forwarded(fake_service):
+    client, calls, _ = fake_service
 
     client.get("/api/books/11111111-1111-4111-8111-000000000001")
 
     assert calls[0].url.path == "/books/11111111-1111-4111-8111-000000000001"
 
 
-def test_catalog_errors_are_passed_through_unchanged(fake_catalog):
-    client, _, set_handler = fake_catalog
+def test_catalog_errors_are_passed_through_unchanged(fake_service):
+    client, _, set_handler = fake_service
     error = {"error": {"code": "BOOK_NOT_FOUND", "message": "No such book"}}
     set_handler(lambda request: httpx2.Response(404, json=error))
 
@@ -74,8 +74,8 @@ def test_catalog_errors_are_passed_through_unchanged(fake_catalog):
     assert response.json() == error
 
 
-def test_post_forwards_body_and_rewrites_location(fake_catalog):
-    client, calls, set_handler = fake_catalog
+def test_post_forwards_body_and_rewrites_location(fake_service):
+    client, calls, set_handler = fake_service
     set_handler(
         lambda request: httpx2.Response(201, json={"id": "abc"}, headers={"Location": "/books/abc"})
     )
@@ -94,8 +94,8 @@ def refuse_connection(request):
     raise httpx2.ConnectError("connection refused", request=request)
 
 
-def test_get_is_retried_then_503_when_catalog_is_down(fake_catalog):
-    client, calls, set_handler = fake_catalog
+def test_get_is_retried_then_503_when_catalog_is_down(fake_service):
+    client, calls, set_handler = fake_service
     set_handler(refuse_connection)
 
     response = client.get("/api/books")
@@ -105,8 +105,8 @@ def test_get_is_retried_then_503_when_catalog_is_down(fake_catalog):
     assert len(calls) == proxy.MAX_ATTEMPTS  # tried 3 times before giving up
 
 
-def test_get_succeeds_if_a_retry_works(fake_catalog):
-    client, calls, set_handler = fake_catalog
+def test_get_succeeds_if_a_retry_works(fake_service):
+    client, calls, set_handler = fake_service
     answers = iter([refuse_connection, lambda request: httpx2.Response(200, json=[])])
     set_handler(lambda request: next(answers)(request))
 
@@ -116,10 +116,10 @@ def test_get_succeeds_if_a_retry_works(fake_catalog):
     assert len(calls) == 2
 
 
-def test_post_is_not_retried(fake_catalog):
+def test_post_is_not_retried(fake_service):
     # A failed POST might still have reached catalog; repeating it could create the
     # same book twice. So: one attempt only.
-    client, calls, set_handler = fake_catalog
+    client, calls, set_handler = fake_service
     set_handler(refuse_connection)
 
     response = client.post("/api/books", json={"title": "Emma"})
@@ -128,8 +128,8 @@ def test_post_is_not_retried(fake_catalog):
     assert len(calls) == 1
 
 
-def test_timeout_counts_as_unavailable(fake_catalog):
-    client, _, set_handler = fake_catalog
+def test_timeout_counts_as_unavailable(fake_service):
+    client, _, set_handler = fake_service
 
     def time_out(request):
         raise httpx2.ReadTimeout("took too long", request=request)
@@ -139,6 +139,56 @@ def test_timeout_counts_as_unavailable(fake_catalog):
     response = client.get("/api/books")
 
     assert response.status_code == 503
+
+
+USER_ID = "33333333-3333-4333-8333-000000000001"
+BOOK_ID = "11111111-1111-4111-8111-000000000001"
+
+
+def test_cart_get_goes_to_the_cart_service(fake_service):
+    client, calls, set_handler = fake_service
+    cart = {"userId": USER_ID, "items": []}
+    set_handler(lambda request: httpx2.Response(200, json=cart))
+
+    response = client.get(f"/api/carts/{USER_ID}")
+
+    assert response.status_code == 200
+    assert response.json() == cart
+    [sent] = calls
+    assert str(sent.url) == f"http://cart.test:8002/carts/{USER_ID}"
+
+
+def test_cart_put_forwards_the_body(fake_service):
+    client, calls, _ = fake_service
+
+    client.put(f"/api/carts/{USER_ID}/items/{BOOK_ID}", json={"quantity": 2})
+
+    [sent] = calls
+    assert sent.method == "PUT"
+    assert str(sent.url) == f"http://cart.test:8002/carts/{USER_ID}/items/{BOOK_ID}"
+    assert b'"quantity"' in sent.content
+
+
+def test_cart_delete_passes_on_an_empty_204(fake_service):
+    client, calls, set_handler = fake_service
+    set_handler(lambda request: httpx2.Response(204))
+
+    response = client.delete(f"/api/carts/{USER_ID}/items/{BOOK_ID}")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert calls[0].method == "DELETE"
+
+
+def test_503_names_the_cart_service_when_it_is_down(fake_service):
+    client, _, set_handler = fake_service
+    set_handler(refuse_connection)
+
+    response = client.get(f"/api/carts/{USER_ID}")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
+    assert "cart" in response.json()["error"]["message"]
 
 
 def test_real_client_has_a_timeout():

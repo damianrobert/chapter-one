@@ -12,14 +12,17 @@ services:
     environment:
       PORT: 8000
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      # Where to forward /api/books. "catalog" is resolved by Docker's DNS.
+      # Where to forward /api/books and /api/carts. Docker's DNS resolves these names.
       CATALOG_URL: http://catalog:8001
+      CART_URL: http://cart:8002
     ports:
       - "${GATEWAY_PORT:-8000}:8000"
-    # Only "start after catalog has started", NOT "wait until healthy": the gateway
-    # must cope with catalog being down anyway (it answers 503 for book requests).
+    # Only "start after they have started", NOT "wait until healthy": the gateway
+    # must cope with a service being down anyway (it answers 503 for that service's
+    # requests).
     depends_on:
       - catalog
+      - cart
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=2)"]
       interval: 10s

@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     # name; in Kubernetes it will be the catalog Service's name). No default: a
     # missing address should stop the gateway at startup, not fail on every request.
     catalog_url: str
+    # env: CART_URL, e.g. http://cart:8002. Required for the same reason.
+    cart_url: str
 
 
 settings = Settings()

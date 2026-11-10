@@ -2,11 +2,13 @@
 
     /api/books        -> catalog  /books
     /api/books/<...>  -> catalog  /books/<...>
+    /api/carts        -> cart     /carts
+    /api/carts/<...>  -> cart     /carts/<...>
 
 The gateway strips the /api prefix (CLAUDE.md, API conventions). It doesn't need to
-know catalog's individual endpoints. Anything under /api/books goes to catalog,
-and catalog answers 404/405 itself for paths or methods it doesn't support.
-Cart routes are added in a later piece.
+know each service's individual endpoints. Anything under /api/books goes to catalog,
+anything under /api/carts goes to cart, and the service itself answers 404/405 for
+paths or methods it doesn't support.
 """
 
 from fastapi import APIRouter, Request, Response
@@ -26,3 +28,10 @@ async def books(request: Request) -> Response:
     return await forward(
         request, request.app.state.http_client, "catalog", settings.catalog_url, path
     )
+
+
+@router.api_route("/api/carts", methods=ALL_METHODS)
+@router.api_route("/api/carts/{rest:path}", methods=ALL_METHODS)
+async def carts(request: Request) -> Response:
+    path = request.url.path.removeprefix("/api")
+    return await forward(request, request.app.state.http_client, "cart", settings.cart_url, path)

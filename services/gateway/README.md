@@ -11,8 +11,9 @@ routes each request to the right service. Later it also checks the user's login
 | GET    | `/health/live`  | Process is up                                        |
 | GET    | `/health/ready` | Always ready once running (doesn't check other services — see `app/main.py`) |
 | any    | `/api/books`, `/api/books/...` | Forwarded to catalog as `/books...` (see catalog's README) |
+| any    | `/api/carts`, `/api/carts/...` | Forwarded to cart as `/carts...` (see cart's README) |
 
-`/api/carts...` → cart comes in a later piece. The routing table is `app/routes.py`.
+The routing table is `app/routes.py`.
 
 How forwarding works (`app/proxy.py`):
 - Every call to a service has a **2s timeout**.
@@ -32,6 +33,7 @@ for unknown paths.
 | `PORT`        | `8000`     | HTTP port                                 |
 | `LOG_LEVEL`   | `INFO`     | Log level                                 |
 | `CATALOG_URL` | (required) | Catalog's address, e.g. `http://catalog:8001` |
+| `CART_URL`    | (required) | Cart's address, e.g. `http://cart:8002`   |
 
 ## Logs
 
@@ -49,5 +51,5 @@ ruff check . && ruff format --check .
 
 ## Run with Docker
 
-From the repo root: `docker compose up --build` (the gateway needs catalog). Then
+From the repo root: `docker compose up --build` (the gateway needs catalog and cart). Then
 `curl localhost:8000/api/books`. Image `chapter-one/gateway`, runs as non-root (UID 10001).
