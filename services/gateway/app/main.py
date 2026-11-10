@@ -1,7 +1,7 @@
 """The API gateway: the single front door of Chapter One.
 
 The frontend only ever talks to the gateway. The gateway decides which service
-handles a request (routing), and later checks who the user is (JWT) and adds a
+handles a request (routing), checks who the user is (JWT), and later adds a
 correlation ID. Services behind it stay simple and never face the internet directly.
 
 The routing table is in app/routes.py; how a request is forwarded is in app/proxy.py.

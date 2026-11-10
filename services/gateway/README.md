@@ -1,8 +1,8 @@
 # gateway
 
 The single front door of Chapter One. The frontend talks only to the gateway; it
-routes each request to the right service. Later it also checks the user's login
-(JWT) and adds a correlation ID. It has no database.
+routes each request to the right service and checks the user's login (JWT). Later
+it also adds a correlation ID. It has no database.
 
 ## Endpoints
 

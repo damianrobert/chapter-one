@@ -5,8 +5,8 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 
 ## Current status
 
-- **Roadmap step:** 2 in progress (API gateway + Cart service with Redis)
-- **Next piece:** step 2, piece 7 — learning guide `docs/learning/step-2-gateway-cart.md`
+- **Roadmap step:** 2 done (API gateway + Cart service with Redis)
+- **Next piece:** step 3 — plan its pieces (Order service calling Inventory synchronously)
 - **Last updated:** 2026-11-10
 
 ## Step 1 — Catalog service
@@ -32,8 +32,10 @@ Learning guide for this step: `docs/learning/step-1-catalog.md`.
 | 3  | Cart service skeleton with Redis (health checks, Compose)             | done    | `2e9e915` |
 | 4  | Cart endpoints (add/remove/list, 7-day TTL), book check + price via catalog | done | `209b2c3` |
 | 5  | Gateway forwards `/api/carts...` to cart                              | done    | `2a9a3b7` |
-| 6  | JWT validation at the gateway, forwards `X-User-ID`                   | done    |           |
-| 7  | Learning guide `docs/learning/step-2-gateway-cart.md`                 | todo    |           |
+| 6  | JWT validation at the gateway, forwards `X-User-ID`                   | done    | `5ae209d` |
+| 7  | Learning guide `docs/learning/step-2-gateway-cart.md`                 | done    |           |
+
+Learning guide for this step: `docs/learning/step-2-gateway-cart.md`.
 
 ## Decisions made along the way
 
@@ -132,3 +134,9 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 - Compose publishes catalog's and cart's ports on the host, which skips the gateway's
   login checks. Fine locally; in Kubernetes (step 7) only the gateway should be exposed.
 - Cart doesn't forward a correlation ID to catalog yet (roadmap step 6).
+- Timeouts don't nest: the gateway waits 2s for cart, but cart can spend about 6.6s on a
+  frozen catalog (3 tries of 2s plus pauses). Tested 2026-11-10 with `docker compose pause
+  catalog`: the client got 503 "cart service is unavailable" after 2s, and cart saved the
+  item anyway once catalog resumed. Harmless for cart's repeatable PUT. Decide before order
+  (step 3) adds longer call chains: e.g. cart's total time on catalog must fit under the
+  gateway's timeout.
