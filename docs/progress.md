@@ -5,8 +5,9 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 
 ## Current status
 
-- **Roadmap step:** 3 in progress (Order service calling Inventory synchronously)
-- **Next piece:** step 3, piece 6 — break it on purpose, learning guide `step-3-...md`
+- **Roadmap step:** 3 done; 4 next (replace order → inventory call with RabbitMQ events)
+- **Next piece:** step 4, piece 1 — RabbitMQ in Compose + event envelope in `shared/`
+  (new infrastructure: confirm with the user before adding)
 - **Last updated:** 2026-11-11
 
 ## Step 1 — Catalog service
@@ -48,8 +49,24 @@ Step 4 replaces that call with events.
 | 2  | Inventory endpoints: get/set stock, reserve stock atomically (hard rule 5) | done | `60f1363` |
 | 3  | Order skeleton: own Postgres, `orders` + `order_items` tables         | done    | `c6c4fa1` |
 | 4  | `POST /orders`: read cart, copy prices, call inventory, CONFIRMED/CANCELLED; `GET /orders` | done | `235f59f` |
-| 5  | Gateway forwards `/api/orders`; settle the timeout budget between services | done    |           |
-| 6  | Break it on purpose (pause inventory), learning guide `step-3-...md`  | planned |           |
+| 5  | Gateway forwards `/api/orders`; settle the timeout budget between services | done    | `b7ebb5f` |
+| 6  | Break it on purpose (pause inventory), learning guide `step-3-...md`  | done    |           |
+
+Learning guide for this step: `docs/learning/step-3-order-inventory-sync.md` (Part 4 has
+the break-it results).
+
+## Step 4 — Checkout via RabbitMQ events (the saga)
+
+Draft plan; adjust as we go. Outbox and Notification are step 5.
+
+| #  | Piece                                                                 | Status  | Commit    |
+|----|-----------------------------------------------------------------------|---------|-----------|
+| 1  | RabbitMQ in Compose (ask first: new infrastructure), event envelope in `shared/` | planned | |
+| 2  | Order publishes `OrderCreated`; `POST /orders` answers 202 with a PENDING order | planned | |
+| 3  | Inventory consumes `OrderCreated`, reserves, publishes `StockReserved` / `StockFailed` | planned | |
+| 4  | Order consumes the replies → CONFIRMED / CANCELLED, publishes `OrderConfirmed` / `OrderCancelled` | planned | |
+| 5  | Cart consumes `OrderConfirmed` and empties the cart                   | planned |           |
+| 6  | Remove the HTTP reservation call, break it again, learning guide `step-4-...md` | planned | |
 
 ## Decisions made along the way
 
@@ -198,6 +215,12 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   order 5s. Checked 2026-11-11 with `docker compose pause`: frozen inventory → order's own
   503 `INVENTORY_UNAVAILABLE` after 1.5s; frozen catalog → cart's 503
   `CATALOG_UNAVAILABLE` after 1.5s (before: the gateway's generic 503 at 2s).
+- Step 3 break-it results (2026-11-11, full table in the step-3 guide): catalog off →
+  ordering still works; cart off → 503, nothing stored; inventory off/DB off → 503, order
+  PENDING; **inventory frozen then unfrozen → order PENDING but the copy *was* reserved**
+  (lost answer, nobody notices). 6 simultaneous orders for 2 copies → exactly 2 confirmed.
+  Leftover PENDING orders and reservations from these tests are in the local DBs;
+  `docker compose down -v` resets everything.
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 
