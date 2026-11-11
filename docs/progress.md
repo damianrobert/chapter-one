@@ -6,9 +6,9 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 ## Current status
 
 - **Roadmap step:** 4 in progress (replace order → inventory call with RabbitMQ events)
-- **Next piece:** step 4, piece 4 — order consumes `StockReserved` / `StockFailed` →
-  CONFIRMED / CANCELLED, publishes `OrderConfirmed` / `OrderCancelled`. Until then every
-  new order stays `PENDING` (inventory does reserve, but nobody hears its answer).
+- **Next piece:** step 4, piece 5 — cart consumes `OrderConfirmed` and empties the
+  user's cart. The saga itself now works end to end: a new order becomes `CONFIRMED` or
+  `CANCELLED` within a fraction of a second.
 - **Last updated:** 2026-11-11
 
 ## Step 1 — Catalog service
@@ -65,7 +65,7 @@ Draft plan; adjust as we go. Outbox and Notification are step 5.
 | 1  | RabbitMQ in Compose (approved 2026-11-11), event envelope in `shared/` | done |           |
 | 2  | Order publishes `OrderCreated`; `POST /orders` answers 202 with a PENDING order (HTTP call to inventory removed) | done | |
 | 3  | Inventory consumes `OrderCreated`, reserves, publishes `StockReserved` / `StockFailed`; failed reservations remembered | done | |
-| 4  | Order consumes the replies → CONFIRMED / CANCELLED, publishes `OrderConfirmed` / `OrderCancelled` | planned | |
+| 4  | Order consumes the replies → CONFIRMED / CANCELLED, publishes `OrderConfirmed` / `OrderCancelled` | done | |
 | 5  | Cart consumes `OrderConfirmed` and empties the cart                   | planned |           |
 | 6  | Decide about inventory's HTTP reservation endpoint, break it again, learning guide `step-4-...md` | planned | |
 
@@ -296,6 +296,27 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   `StockFailed`; inventory stopped while ordering → order still 202, and after starting
   inventory the waiting `OrderCreated` was handled (stock −2). The management API's
   queue counts lag a few seconds, so don't trust "0 waiting" right after publishing.
+- Order's consumer (`services/order/app/consumer.py`, step 4 piece 4): two durable
+  queues, `order.stock-reserved` and `order.stock-failed` (one per event, per the naming
+  rule), on one channel, prefetch 10. Same shape as inventory's consumer: read → finish
+  the order → publish the follow-up → ack last; unreadable or **unknown order id** →
+  reject without requeue; other errors → wait 2s, nack with requeue.
+- `finish_order()` now returns the order (`FinishedOrder`, with `changed`), using
+  `UPDATE ... WHERE status = 'PENDING' RETURNING ...`. A repeated answer changes nothing
+  and **publishes the follow-up again** (like inventory: the first may have been lost).
+  An answer that contradicts the stored status (StockReserved for a CANCELLED order) is
+  logged as an error and nothing is published; it can't happen today.
+- The consumer publishes through the existing `EventPublisher` (its own connection,
+  1.5s budget), so receiving and sending use separate connections.
+- `OrderConfirmed` payload: `orderId, userId, totalMinor, currency` (CLAUDE.md said
+  "total"; spelled out per the money rule). `OrderCancelled`: `orderId, userId, reason`
+  (the reason from `StockFailed`, also stored as `cancel_reason`). Payload classes in
+  `shared/events.py`.
+- Order's `/health/ready` has a third check, `consumer` (connected and consuming).
+- Checked 2026-11-11 against Compose through the gateway: in-stock order → 202 PENDING,
+  CONFIRMED ~60ms later; Dorian Gray → CANCELLED `INSUFFICIENT_STOCK`; same
+  correlationId on OrderCreated → StockReserved → OrderConfirmed. Orders placed before
+  this piece stay PENDING (their answers were dropped: no queue existed yet).
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 
@@ -317,7 +338,13 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   remove it once the consumer exists? Decide in piece 6.
 - Unreadable events are dropped (logged). A dead-letter queue would keep them for
   inspection; consider in step 5. Until then such an order stays `PENDING`.
-- `StockReserved` / `StockFailed` are published but nobody listens until piece 4
-  (warnings "event not delivered to any queue" in inventory's log are expected).
+- `OrderConfirmed` / `OrderCancelled` are published but nobody listens until piece 5 /
+  step 5 (warnings "event not delivered to any queue" in order's log are expected).
+- Consumer plumbing (connect loop, stop, in-progress count) is now copied in inventory
+  and order. Cart (piece 5) would make three copies: consider moving it into
+  `shared/messaging.py` then.
+- A repeated answer re-publishes the follow-up with a **new** `eventId`, so a consumer
+  can't spot the repeat by `eventId` alone. Notification (step 5) should dedupe by order
+  id + event type, or the outbox can give the repeat the same `eventId`.
 - Double-clicking "order" places two orders (no idempotency key on `POST /orders`).
   Consider an `Idempotency-Key` header later.

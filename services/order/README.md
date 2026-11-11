@@ -5,8 +5,8 @@ Owns orders and their status. At checkout it copies what it needs from the cart
 happens in catalog.
 
 It doesn't call inventory: it publishes an `OrderCreated` event to RabbitMQ and answers
-right away; inventory's reply arrives later as an event (the checkout saga in
-`CLAUDE.md`, roadmap step 4).
+right away; inventory's reply arrives later as an event, and order then confirms or
+cancels the order (the checkout saga in `CLAUDE.md`, roadmap step 4).
 
 ## Endpoints
 
@@ -20,7 +20,7 @@ your own orders.
 | GET    | `/orders`       | Your orders, newest first. `limit` (1–100, default 20), `offset` |
 | GET    | `/orders/{id}`  | One of your orders; someone else's or unknown → 404 `ORDER_NOT_FOUND` |
 | GET    | `/health/live`  | Process is up (no dependency checks)                       |
-| GET    | `/health/ready` | Database and RabbitMQ reachable (200), otherwise 503       |
+| GET    | `/health/ready` | Database, RabbitMQ (publisher) and the event consumer OK (200), otherwise 503 |
 
 What `POST /orders` does (step 4, with events):
 
@@ -33,13 +33,28 @@ What `POST /orders` does (step 4, with events):
      in `details` (nothing re-sends it yet: the outbox in step 5 fixes that)
 
 The event carries the request's `X-Correlation-ID` if it's a UUID, otherwise a new one.
-Turning `PENDING` into `CONFIRMED`/`CANCELLED` comes when order consumes inventory's
-replies (step 4 piece 4). Until then every order stays `PENDING`.
+
+## Events
+
+Besides the API, order runs a consumer (`app/consumer.py`) that finishes orders when
+inventory answers:
+
+| Queue                  | Event in        | Order becomes                  | Event out (same correlationId)                     |
+|------------------------|-----------------|--------------------------------|----------------------------------------------------|
+| `order.stock-reserved` | `StockReserved` | `CONFIRMED`                    | `OrderConfirmed` (orderId, userId, totalMinor, currency) |
+| `order.stock-failed`   | `StockFailed`   | `CANCELLED` (`cancelReason` = the event's reason) | `OrderCancelled` (orderId, userId, reason) |
+
+- Only a `PENDING` order changes. The same answer again → nothing changes, the
+  follow-up event is published again (the first may have been lost).
+- Answer contradicting the order's status → logged as an error, nothing published.
+- Unreadable message or unknown order id → dropped with an error log. Database or
+  broker trouble → put back in the queue after 2s.
+- Messages are acked only after the follow-up event is published.
 
 Budgets: 1.5s for the cart call (retries included, up to 3 attempts when there's no
 answer; `app/clients.py`) and 1.5s for publishing (`app/events.py`); why:
-`docs/decisions/0002-timeout-budgets.md`. The cart is not emptied yet (that comes with
-events in step 4/5).
+`docs/decisions/0002-timeout-budgets.md`. The cart is not emptied yet: cart will do that
+itself when it hears `OrderConfirmed` (step 4 piece 5).
 
 ```bash
 curl -X POST localhost:8004/orders -H "X-User-ID: <uuid>"

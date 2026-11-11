@@ -30,6 +30,7 @@ async def fail(*args):
 @pytest.fixture
 def broker_ok(client, monkeypatch):
     monkeypatch.setattr(client.app.state.publisher, "check", ok)
+    monkeypatch.setattr(client.app.state.consumer, "is_consuming", lambda: True)
 
 
 def test_ready_returns_ok_when_database_and_broker_reachable(client, monkeypatch, broker_ok):
@@ -38,7 +39,10 @@ def test_ready_returns_ok_when_database_and_broker_reachable(client, monkeypatch
     response = client.get("/health/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "checks": {"database": "ok", "broker": "ok"}}
+    assert response.json() == {
+        "status": "ok",
+        "checks": {"database": "ok", "broker": "ok", "consumer": "ok"},
+    }
 
 
 def test_ready_returns_503_when_database_unreachable(client, monkeypatch, broker_ok):
@@ -49,19 +53,20 @@ def test_ready_returns_503_when_database_unreachable(client, monkeypatch, broker
     assert response.status_code == 503
     assert response.json() == {
         "status": "unavailable",
-        "checks": {"database": "unreachable", "broker": "ok"},
+        "checks": {"database": "unreachable", "broker": "ok", "consumer": "ok"},
     }
 
 
 def test_ready_returns_503_when_broker_unreachable(client, monkeypatch):
     monkeypatch.setattr(db, "ping_database", lambda engine: ok())
-    # The real publisher, pointed at the dummy URL from conftest.py (nothing listens on
-    # port 1), so this also checks that a refused connection is reported, not raised.
+    # The real publisher and consumer, pointed at the dummy URL from conftest.py (nothing
+    # listens on port 1), so this also checks that a refused connection is reported,
+    # not raised.
 
     response = client.get("/health/ready")
 
     assert response.status_code == 503
     assert response.json() == {
         "status": "unavailable",
-        "checks": {"database": "ok", "broker": "unreachable"},
+        "checks": {"database": "ok", "broker": "unreachable", "consumer": "unreachable"},
     }

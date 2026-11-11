@@ -141,3 +141,25 @@ def test_stock_reply_payloads_as_json():
     assert StockFailedPayload(
         order_id=uuid.UUID(ORDER_ID), reason="INSUFFICIENT_STOCK"
     ).to_dict() == {"orderId": ORDER_ID, "reason": "INSUFFICIENT_STOCK"}
+
+
+def test_order_outcome_payloads_as_json():
+    from shared.events import OrderCancelledPayload, OrderConfirmedPayload
+
+    confirmed = OrderConfirmedPayload(
+        order_id=uuid.UUID(ORDER_ID), user_id=uuid.UUID(USER_ID), total_minor=3497, currency="EUR"
+    )
+    assert confirmed.to_dict() == {
+        "orderId": ORDER_ID,
+        "userId": USER_ID,
+        "totalMinor": 3497,
+        "currency": "EUR",
+    }
+    cancelled = OrderCancelledPayload(
+        order_id=uuid.UUID(ORDER_ID), user_id=uuid.UUID(USER_ID), reason="INSUFFICIENT_STOCK"
+    )
+    assert cancelled.to_dict() == {
+        "orderId": ORDER_ID,
+        "userId": USER_ID,
+        "reason": "INSUFFICIENT_STOCK",
+    }

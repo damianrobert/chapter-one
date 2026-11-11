@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app import clients, db, events, orders
 from app.config import settings
+from app.consumer import StockReplyConsumer
 from app.errors import register_error_handlers
 
 logger = logging.getLogger(__name__)
@@ -21,9 +22,17 @@ async def lifespan(app: FastAPI):
     app.state.http_client = clients.create_client()
     # Publishes events to RabbitMQ. Doesn't connect yet (see app/events.py).
     app.state.publisher = events.EventPublisher(settings.rabbitmq_url, settings.service_name)
+    # Takes inventory's answers (StockReserved / StockFailed) from RabbitMQ and finishes
+    # orders; connects in the background (app/consumer.py).
+    app.state.consumer = StockReplyConsumer(
+        settings.rabbitmq_url, app.state.engine, app.state.publisher
+    )
+    app.state.consumer.start()
     yield
     # Shutdown: runs after uvicorn has stopped accepting requests and in-flight
-    # requests finished (e.g. on SIGTERM). Close connections cleanly.
+    # requests finished (e.g. on SIGTERM). Stop taking events first (handling them
+    # uses the database and the publisher), then close connections cleanly.
+    await app.state.consumer.stop()
     await app.state.publisher.close()
     await app.state.http_client.aclose()
     await app.state.engine.dispose()
@@ -69,11 +78,13 @@ async def live() -> dict:
 @app.get("/health/ready")
 async def ready(request: Request) -> JSONResponse:
     # Readiness: "can I serve real traffic right now?" Checks the database and RabbitMQ:
-    # without the broker, placing an order fails. (Not cart: like the gateway, order
-    # stays "ready" when cart is down and answers 503 only where cart is needed.)
+    # without the broker, placing an order fails ("broker", the publisher) and
+    # inventory's answers aren't picked up ("consumer"). (Not cart: like the gateway,
+    # order stays "ready" when cart is down and answers 503 only where cart is needed.)
     checks = {
         "database": await _check("database", db.ping_database(request.app.state.engine)),
         "broker": await _check("broker", request.app.state.publisher.check()),
+        "consumer": "ok" if request.app.state.consumer.is_consuming() else "unreachable",
     }
     if all(result == "ok" for result in checks.values()):
         return JSONResponse(content={"status": "ok", "checks": checks})

@@ -13,8 +13,9 @@ then answers right away:
 
 Later, and without the customer waiting, inventory picks up the event, reserves the
 books and replies with its own event; order then moves the order to CONFIRMED or
-CANCELLED (pieces 3 and 4 of step 4). The client finds out by looking at the order
-again (`GET /orders/{id}`). That's the **checkout saga** in CLAUDE.md.
+CANCELLED (`finish_order()` below, called from app/consumer.py). The client finds out
+by looking at the order again (`GET /orders/{id}`). That's the **checkout saga** in
+CLAUDE.md.
 
 Why 202 and not 201? 201 means "created, here's the result". 202 means "accepted,
 not finished yet", which is the honest answer while the order is still PENDING.
@@ -22,8 +23,6 @@ not finished yet", which is the honest answer while the order is still PENDING.
 If RabbitMQ doesn't take the event, the order stays PENDING and the client gets 503
 `BROKER_UNAVAILABLE` with the order id. Nothing re-sends the event later: that order is
 stuck. Step 5's outbox pattern closes this gap (hard rule 4).
-
-Until pieces 3 and 4 exist, *every* order stays PENDING: nobody is listening yet.
 
 ## Who may see which order
 
@@ -33,6 +32,7 @@ answers 404, the same as an id that doesn't exist, so ids can't be probed.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -174,32 +174,65 @@ async def save_pending_order(engine: AsyncEngine, user_id: UUID, cart: dict) -> 
     return order_id
 
 
+@dataclass(frozen=True)
+class FinishedOrder:
+    """An order after finish_order(): what its follow-up event needs."""
+
+    user_id: UUID
+    status: str  # CONFIRMED or CANCELLED (could differ from what was asked, see below)
+    cancel_reason: str | None
+    total_minor: int
+    currency: str
+    changed: bool  # False: it was already finished before this call
+
+
 async def finish_order(
     engine: AsyncEngine, order_id: UUID, status: str, cancel_reason: str | None = None
-) -> None:
-    """Move a PENDING order to CONFIRMED or CANCELLED.
+) -> FinishedOrder | None:
+    """Move a PENDING order to CONFIRMED or CANCELLED. None if the order doesn't exist.
 
-    Not called right now: in step 4 piece 4 it runs when inventory's reply event
-    (StockReserved / StockFailed) arrives.
+    Called when inventory's reply event (StockReserved / StockFailed) arrives
+    (app/consumer.py).
 
     `WHERE status = 'PENDING'` enforces the only allowed transitions (CLAUDE.md): a
-    confirmed or cancelled order never changes again.
+    confirmed or cancelled order never changes again. If the order was already
+    finished (the same reply delivered twice), nothing changes and we return the order
+    as it is, with `changed=False`. The caller compares `status` with what it asked for.
     """
+    wanted = [
+        orders.c.user_id,
+        orders.c.status,
+        orders.c.cancel_reason,
+        orders.c.total_minor,
+        orders.c.currency,
+    ]
     async with engine.begin() as conn:
-        result = await conn.execute(
-            update(orders)
-            .where(orders.c.id == order_id, orders.c.status == PENDING)
-            .values(status=status, cancel_reason=cancel_reason, updated_at=func.now())
+        # RETURNING hands back the updated row, so no second query is needed.
+        row = (
+            (
+                await conn.execute(
+                    update(orders)
+                    .where(orders.c.id == order_id, orders.c.status == PENDING)
+                    .values(status=status, cancel_reason=cancel_reason, updated_at=func.now())
+                    .returning(*wanted)
+                )
+            )
+            .mappings()
+            .first()
         )
-    if result.rowcount != 1:
-        # E.g. a reply event delivered twice: the order is already finished. We want
-        # to hear about it rather than silently overwrite.
-        logger.error(
-            "order was not pending, status not changed",
-            extra={"orderId": str(order_id), "wantedStatus": status},
-        )
-    else:
+        changed = row is not None
+        if not changed:
+            # Not pending (or not there at all): look at it as it is.
+            row = (
+                (await conn.execute(select(*wanted).where(orders.c.id == order_id)))
+                .mappings()
+                .first()
+            )
+    if row is None:
+        return None
+    if changed:
         logger.info("order finished", extra={"orderId": str(order_id), "status": status})
+    return FinishedOrder(**row, changed=changed)
 
 
 # --- reading orders ---

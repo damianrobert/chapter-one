@@ -114,6 +114,26 @@ class StockFailedPayload(Payload):
     reason: str = Field(min_length=1)  # e.g. INSUFFICIENT_STOCK
 
 
+class OrderConfirmedPayload(Payload):
+    """OrderConfirmed v1: "this order is final". order -> notification, cart.
+
+    The total is money, so integer minor units plus a currency (CLAUDE.md API rules).
+    """
+
+    order_id: uuid.UUID
+    user_id: uuid.UUID
+    total_minor: int = Field(ge=0)
+    currency: str = Field(min_length=3, max_length=3)
+
+
+class OrderCancelledPayload(Payload):
+    """OrderCancelled v1: "this order won't happen". order -> notification."""
+
+    order_id: uuid.UUID
+    user_id: uuid.UUID
+    reason: str = Field(min_length=1)  # e.g. INSUFFICIENT_STOCK
+
+
 def new_event(
     event_type: str,
     payload: dict[str, Any],

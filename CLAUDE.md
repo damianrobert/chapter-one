@@ -103,7 +103,7 @@ All events share an envelope:
 | OrderCreated    | order     | inventory            | orderId, userId, items[{bookId, qty}]     |
 | StockReserved   | inventory | order                | orderId                                   |
 | StockFailed     | inventory | order                | orderId, reason                           |
-| OrderConfirmed  | order     | notification, cart   | orderId, userId, total                    |
+| OrderConfirmed  | order     | notification, cart   | orderId, userId, totalMinor, currency     |
 | OrderCancelled  | order     | notification         | orderId, userId, reason                   |
 
 When adding or changing an event, update this table. Breaking payload changes require bumping `version`.
