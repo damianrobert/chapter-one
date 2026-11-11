@@ -4,7 +4,6 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.errors import ApiError
 from app.reservations import reserve_stock
 from app.schemas import ReservationItem
 
@@ -75,15 +74,18 @@ def test_book_without_stock_record_is_insufficient_stock(db_client):
     assert response.json()["error"]["code"] == "INSUFFICIENT_STOCK"
 
 
-def test_a_failed_order_can_try_again_later(db_client):
-    # The failed attempt left no reservation behind, so once stock arrives the same
-    # order id can succeed.
+def test_a_failed_order_stays_failed_even_after_new_stock_arrives(db_client):
+    # The outcome is stored, so a repeat (e.g. the same event delivered twice) gets the
+    # same answer and doesn't lock copies away for an order that was turned down.
     order_id = str(uuid.uuid4())
     assert reserve(db_client, order_id, {DORIAN: 1}).status_code == 409
 
     db_client.put(f"/stock/{DORIAN}", json={"quantity": 1})
 
-    assert reserve(db_client, order_id, {DORIAN: 1}).status_code == 201
+    again = reserve(db_client, order_id, {DORIAN: 1})
+    assert again.status_code == 409
+    assert again.json()["error"]["code"] == "INSUFFICIENT_STOCK"
+    assert quantity_of(db_client, DORIAN) == 1
 
 
 @pytest.mark.parametrize(
@@ -108,11 +110,8 @@ async def _many_orders_at_once(url: str, orders: int) -> list[bool]:
     items = [ReservationItem(book_id=uuid.UUID(DRACULA), quantity=1)]
 
     async def one_order() -> bool:
-        try:
-            await reserve_stock(engine, uuid.uuid4(), items)
-            return True
-        except ApiError:
-            return False
+        outcome = await reserve_stock(engine, uuid.uuid4(), items)
+        return outcome.reserved
 
     try:
         # gather() starts them all together, so they really overlap in the database.

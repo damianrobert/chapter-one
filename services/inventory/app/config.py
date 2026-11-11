@@ -19,5 +19,9 @@ class Settings(BaseSettings):
     # point at some guessed host.
     database_url: str
 
+    # env: RABBITMQ_URL, e.g. amqp://user:pass@rabbitmq:5672/ — where inventory receives
+    # OrderCreated and publishes StockReserved / StockFailed (step 4).
+    rabbitmq_url: str
+
 
 settings = Settings()

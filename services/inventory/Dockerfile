@@ -35,6 +35,9 @@ COPY --from=builder /opt/venv /opt/venv
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY app ./app
+# The shared event definitions (repo-root shared/), handed in by docker-compose.yml as
+# an extra build context named "shared" (this image builds from services/inventory/).
+COPY --from=shared __init__.py events.py messaging.py ./shared/
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 USER 10001

@@ -1,5 +1,6 @@
-# To test shared/ on its own. Services already have pydantic (via FastAPI); keep this
-# version the same as theirs.
+# To test shared/ on its own. Services already have pydantic (via FastAPI) and, if they
+# send or receive events, aio-pika; keep these versions the same as theirs.
 pydantic==2.14.3
+aio-pika==10.2.3  # for messaging.py
 pytest==9.2.0
 ruff==0.17.3

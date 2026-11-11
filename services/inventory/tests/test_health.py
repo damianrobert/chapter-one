@@ -19,25 +19,48 @@ def test_live_returns_ok(client):
     assert response.json() == {"status": "ok", "service": "inventory"}
 
 
-def test_ready_returns_ok_when_database_reachable(client, monkeypatch):
-    async def fake_ping(engine):
-        return None
+async def ok(engine):
+    return None
 
-    monkeypatch.setattr(db, "ping_database", fake_ping)
+
+async def fail(engine):
+    raise ConnectionError("db down")
+
+
+@pytest.fixture
+def consuming(client, monkeypatch):
+    monkeypatch.setattr(client.app.state.consumer, "is_consuming", lambda: True)
+
+
+def test_ready_returns_ok_when_database_and_broker_reachable(client, monkeypatch, consuming):
+    monkeypatch.setattr(db, "ping_database", ok)
 
     response = client.get("/health/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "checks": {"database": "ok"}}
+    assert response.json() == {"status": "ok", "checks": {"database": "ok", "broker": "ok"}}
 
 
-def test_ready_returns_503_when_database_unreachable(client, monkeypatch):
-    async def failing_ping(engine):
-        raise ConnectionError("db down")
-
-    monkeypatch.setattr(db, "ping_database", failing_ping)
+def test_ready_returns_503_when_database_unreachable(client, monkeypatch, consuming):
+    monkeypatch.setattr(db, "ping_database", fail)
 
     response = client.get("/health/ready")
 
     assert response.status_code == 503
-    assert response.json() == {"status": "unavailable", "checks": {"database": "unreachable"}}
+    assert response.json() == {
+        "status": "unavailable",
+        "checks": {"database": "unreachable", "broker": "ok"},
+    }
+
+
+def test_ready_returns_503_while_not_connected_to_rabbitmq(client, monkeypatch):
+    # The real consumer, pointed at the dummy URL from conftest.py: never connects.
+    monkeypatch.setattr(db, "ping_database", ok)
+
+    response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "unavailable",
+        "checks": {"database": "ok", "broker": "unreachable"},
+    }

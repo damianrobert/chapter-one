@@ -1,11 +1,13 @@
 # Tool configuration only. Dependencies live in requirements*.txt.
 
 [tool.pytest.ini_options]
-# Lets tests do `from app.main import app` without installing the package.
-pythonpath = ["."]
+# "." lets tests do `from app.main import app`; "../.." (the repo root) lets the code
+# do `from shared.events import ...`, like it can inside the Docker image.
+pythonpath = [".", "../.."]
 testpaths = ["tests"]
 markers = [
     "db: needs a real Postgres (started in Docker via testcontainers); skip with -m 'not db'",
+    "rabbitmq: needs a real RabbitMQ (started in Docker via testcontainers); skip with -m 'not rabbitmq'",
 ]
 
 [tool.ruff]
@@ -15,3 +17,6 @@ target-version = "py312"
 [tool.ruff.lint]
 # E/F: pycodestyle + pyflakes basics, I: import sorting, B: common bugs, UP: modern syntax
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "shared"]

@@ -52,6 +52,7 @@ import aio_pika
 from aio_pika.abc import AbstractExchange, AbstractRobustConnection
 
 from shared.events import EXCHANGE, EventEnvelope
+from shared.messaging import declare_exchange, log_unroutable, to_message
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ class EventPublisher:
             async with asyncio.timeout(BUDGET_SECONDS):
                 exchange = await self._get_exchange()
                 await exchange.publish(
-                    self._to_message(event), routing_key=event.event_type, mandatory=True
+                    to_message(event, self._app_id), routing_key=event.event_type, mandatory=True
                 )
         except Exception as exc:  # timeout, connection refused, channel closed, ...
             logger.error(
@@ -118,36 +119,11 @@ class EventPublisher:
                     # publisher_confirms=True is aio-pika's default; spelled out because
                     # it's the point: publish() waits for RabbitMQ's "got it".
                     channel = await connection.channel(publisher_confirms=True)
-                    channel.return_callbacks.add(self._on_returned)
-                    # Declaring is "create it if it doesn't exist yet". Safe to repeat,
-                    # and every service that uses the exchange declares it the same way.
-                    self._exchange = await channel.declare_exchange(
-                        EXCHANGE, aio_pika.ExchangeType.TOPIC, durable=True
-                    )
+                    channel.return_callbacks.add(log_unroutable)
+                    self._exchange = await declare_exchange(channel)
                 except BaseException:
                     await connection.close()
                     raise
                 self._connection = connection
                 logger.info("connected to RabbitMQ", extra={"exchange": EXCHANGE})
             return self._exchange
-
-    def _on_returned(self, channel, message) -> None:
-        """RabbitMQ handed a message back: no queue is bound for its event type."""
-        logger.warning(
-            "event not delivered to any queue",
-            extra={"eventType": message.type, "eventId": message.message_id},
-        )
-
-    def _to_message(self, event: EventEnvelope) -> aio_pika.Message:
-        return aio_pika.Message(
-            body=event.to_json(),
-            content_type="application/json",
-            delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-            # Copies of envelope fields as AMQP message properties: the body is the
-            # source of truth, these just make the dashboard and debugging tools nicer.
-            message_id=str(event.event_id),
-            type=event.event_type,
-            correlation_id=str(event.correlation_id),
-            timestamp=event.occurred_at,
-            app_id=self._app_id,
-        )

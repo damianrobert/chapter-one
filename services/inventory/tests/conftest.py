@@ -8,6 +8,9 @@ import pytest
 # Tests that don't use the `database_url` fixture never connect to it: the engine
 # connects lazily, and the health tests fake the DB ping.
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+# Nothing listens on port 1: the app's consumer just keeps retrying in the background
+# during API tests. test_consumer.py starts a real RabbitMQ.
+os.environ.setdefault("RABBITMQ_URL", "amqp://test:test@localhost:1/")
 
 from alembic import command  # noqa: E402  (must come after DATABASE_URL is set)
 from alembic.config import Config  # noqa: E402
@@ -75,3 +78,13 @@ def db_client(database_url, monkeypatch):
     with TestClient(app) as client:
         yield client
     asyncio.run(reset_database(database_url))
+
+
+@pytest.fixture(scope="session")
+def rabbitmq_url():
+    """Start a throwaway RabbitMQ in Docker for the test run; yield its amqp:// URL."""
+    from testcontainers.community.rabbitmq import RabbitMqContainer
+
+    with RabbitMqContainer("rabbitmq:4-alpine") as rabbitmq:
+        params = rabbitmq.get_connection_params()
+        yield f"amqp://{rabbitmq.username}:{rabbitmq.password}@{params.host}:{params.port}/"

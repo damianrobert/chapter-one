@@ -6,8 +6,9 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 ## Current status
 
 - **Roadmap step:** 4 in progress (replace order → inventory call with RabbitMQ events)
-- **Next piece:** step 4, piece 3 — inventory consumes `OrderCreated`, reserves, publishes
-  `StockReserved` / `StockFailed`. Until piece 4 every new order stays `PENDING`.
+- **Next piece:** step 4, piece 4 — order consumes `StockReserved` / `StockFailed` →
+  CONFIRMED / CANCELLED, publishes `OrderConfirmed` / `OrderCancelled`. Until then every
+  new order stays `PENDING` (inventory does reserve, but nobody hears its answer).
 - **Last updated:** 2026-11-11
 
 ## Step 1 — Catalog service
@@ -63,7 +64,7 @@ Draft plan; adjust as we go. Outbox and Notification are step 5.
 |----|-----------------------------------------------------------------------|---------|-----------|
 | 1  | RabbitMQ in Compose (approved 2026-11-11), event envelope in `shared/` | done |           |
 | 2  | Order publishes `OrderCreated`; `POST /orders` answers 202 with a PENDING order (HTTP call to inventory removed) | done | |
-| 3  | Inventory consumes `OrderCreated`, reserves, publishes `StockReserved` / `StockFailed` | planned | |
+| 3  | Inventory consumes `OrderCreated`, reserves, publishes `StockReserved` / `StockFailed`; failed reservations remembered | done | |
 | 4  | Order consumes the replies → CONFIRMED / CANCELLED, publishes `OrderConfirmed` / `OrderCancelled` | planned | |
 | 5  | Cart consumes `OrderConfirmed` and empties the cart                   | planned |           |
 | 6  | Decide about inventory's HTTP reservation endpoint, break it again, learning guide `step-4-...md` | planned | |
@@ -267,6 +268,34 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 - Checked 2026-11-11 against Compose: 202 + PENDING through the gateway; the event caught
   in a temporary queue had the exact CLAUDE.md envelope; RabbitMQ stopped → instant 503
   and ready 503; started again → ready and ordering work without restarting order.
+- `shared/messaging.py` (step 4 piece 3): `declare_exchange()`, `to_message()`,
+  `log_unroutable()` — the RabbitMQ plumbing every service must do identically, so it's
+  shared instead of copied (unlike `logging_config.py`). Needs aio-pika. Payload classes
+  for `StockReserved` / `StockFailed` and the reason `INSUFFICIENT_STOCK` are in
+  `shared/events.py`. Dockerfiles copy `__init__.py events.py messaging.py`.
+- Inventory now **remembers failed reservations** (migration `0004`: `reservations.status`
+  `RESERVED`/`FAILED` + `failure_reason`, DB checks). Reason: with at-least-once
+  delivery, a repeated `OrderCreated` after a restock would otherwise reserve copies for
+  an order already turned down. All-or-nothing now uses a **savepoint**
+  (`begin_nested()`) so the FAILED row survives while the stock updates roll back.
+  HTTP `PUT /reservations` follows the same rule: a failed order id stays failed
+  (step 3's "try again later" test was replaced).
+- Inventory's consumer (`services/inventory/app/consumer.py`): durable queue
+  `inventory.order-created` bound to `OrderCreated`; prefetch 10; reserve → publish reply
+  (with the incoming `correlationId`, publisher confirms, 1.5s budget) → **ack last**. A
+  repeat finds the stored outcome and publishes the same answer again (covers "reserved,
+  then crashed before answering"). Unreadable message (bad JSON/shape, not v1, >99 copies,
+  book twice) → reject without requeue + error log. Other errors → wait 2s, nack with
+  requeue. Connects in a background task, retrying every 3s; readiness includes
+  `checks.broker` (consumer connected). Shutdown: cancel consumer, wait up to 5s for
+  messages in progress, close.
+- Inventory's idempotency comes from the reservation keyed by order id (rule 3's
+  "naturally safe to repeat"), not a `processed_events` table. Fine while each order
+  has exactly one `OrderCreated`.
+- Checked 2026-11-11 against Compose: in stock → `StockReserved`, stock −1; Dorian Gray →
+  `StockFailed`; inventory stopped while ordering → order still 202, and after starting
+  inventory the waiting `OrderCreated` was handled (stock −2). The management API's
+  queue counts lag a few seconds, so don't trust "0 waiting" right after publishing.
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 
@@ -286,5 +315,9 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   (nothing re-sends it). Step 5's outbox fixes this.
 - Inventory's HTTP `PUT /reservations/{orderId}`: keep it (handy for manual tests) or
   remove it once the consumer exists? Decide in piece 6.
+- Unreadable events are dropped (logged). A dead-letter queue would keep them for
+  inspection; consider in step 5. Until then such an order stays `PENDING`.
+- `StockReserved` / `StockFailed` are published but nobody listens until piece 4
+  (warnings "event not delivered to any queue" in inventory's log are expected).
 - Double-clicking "order" places two orders (no idempotency key on `POST /orders`).
   Consider an `Idempotency-Key` header later.

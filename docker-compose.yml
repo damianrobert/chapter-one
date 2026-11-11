@@ -120,20 +120,27 @@ services:
       timeout: 3s
       retries: 10
 
-  # Stock levels. In step 3 order called it over HTTP; in step 4 that's replaced by
-  # events, and inventory will talk to RabbitMQ only (piece 3).
+  # Stock levels. Takes OrderCreated from its queue "inventory.order-created", reserves
+  # the books and answers with StockReserved / StockFailed (step 4).
   inventory:
-    build: ./services/inventory
+    build:
+      context: ./services/inventory
+      additional_contexts:
+        shared: ./shared  # the event envelope; see the order service below
     image: chapter-one/inventory
     environment:
       PORT: 8003
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: postgresql+asyncpg://${INVENTORY_DB_USER:-inventory}:${INVENTORY_DB_PASSWORD:-inventory}@inventory-db:5432/${INVENTORY_DB_NAME:-inventory_db}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-chapter-one}:${RABBITMQ_PASSWORD:-chapter-one}@rabbitmq:5672/
     ports:
       - "${INVENTORY_PORT:-8003}:8003"
+    # RabbitMQ: only "started"; inventory keeps retrying until it can connect.
     depends_on:
       inventory-db:
         condition: service_healthy
+      rabbitmq:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health/live', timeout=2)"]
       interval: 10s

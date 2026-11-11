@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app import db, reservations, stock
 from app.config import settings
+from app.consumer import OrderCreatedConsumer
 from app.errors import register_error_handlers
 
 logger = logging.getLogger(__name__)
@@ -17,9 +18,14 @@ request_logger = logging.getLogger("app.requests")
 async def lifespan(app: FastAPI):
     # Startup: runs once before the first request is accepted.
     app.state.engine = db.create_engine(settings.database_url)
+    # Takes OrderCreated events from RabbitMQ; connects in the background (app/consumer.py).
+    app.state.consumer = OrderCreatedConsumer(settings.rabbitmq_url, app.state.engine)
+    app.state.consumer.start()
     yield
     # Shutdown: runs after uvicorn has stopped accepting requests and in-flight
-    # requests finished (e.g. on SIGTERM). Close pooled DB connections cleanly.
+    # requests finished (e.g. on SIGTERM). Stop taking events first (they use the
+    # database), then close pooled DB connections cleanly.
+    await app.state.consumer.stop()
     await app.state.engine.dispose()
 
 
@@ -63,13 +69,16 @@ async def live() -> dict:
 
 @app.get("/health/ready")
 async def ready(request: Request) -> JSONResponse:
-    # Readiness: "can I serve real traffic right now?" Checks the database.
+    # Readiness: "can I do my job right now?" Inventory's job is handling events, so
+    # besides the database it checks that the event consumer is connected.
+    checks = {"database": "ok", "broker": "ok"}
     try:
         await db.ping_database(request.app.state.engine)
     except Exception:
         logger.warning("readiness check failed: database unreachable", exc_info=True)
-        return JSONResponse(
-            status_code=503,
-            content={"status": "unavailable", "checks": {"database": "unreachable"}},
-        )
-    return JSONResponse(content={"status": "ok", "checks": {"database": "ok"}})
+        checks["database"] = "unreachable"
+    if not request.app.state.consumer.is_consuming():
+        checks["broker"] = "unreachable"
+    if all(result == "ok" for result in checks.values()):
+        return JSONResponse(content={"status": "ok", "checks": checks})
+    return JSONResponse(status_code=503, content={"status": "unavailable", "checks": checks})

@@ -38,7 +38,7 @@ COPY app ./app
 # The shared event definitions (repo-root shared/). This image builds from
 # services/order/, which can't see ../../shared, so docker-compose.yml hands that folder
 # in as an extra build context named "shared". Only the code files, not its tests.
-COPY --from=shared __init__.py events.py ./shared/
+COPY --from=shared __init__.py events.py messaging.py ./shared/
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 USER 10001

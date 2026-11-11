@@ -97,6 +97,23 @@ class OrderCreatedPayload(Payload):
     items: list[OrderCreatedItem] = Field(min_length=1)
 
 
+class StockReservedPayload(Payload):
+    """StockReserved v1: "the books for this order are set aside". inventory -> order."""
+
+    order_id: uuid.UUID
+
+
+# Reasons in StockFailed. Only one so far.
+INSUFFICIENT_STOCK = "INSUFFICIENT_STOCK"
+
+
+class StockFailedPayload(Payload):
+    """StockFailed v1: "can't reserve this order's books". inventory -> order."""
+
+    order_id: uuid.UUID
+    reason: str = Field(min_length=1)  # e.g. INSUFFICIENT_STOCK
+
+
 def new_event(
     event_type: str,
     payload: dict[str, Any],

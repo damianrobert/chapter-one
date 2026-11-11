@@ -5,7 +5,16 @@ file only *describes* the tables so queries can be written in Python. When a
 migration changes a table, update the description here to match.
 """
 
-from sqlalchemy import TIMESTAMP, Column, FetchedValue, ForeignKey, Integer, MetaData, Table
+from sqlalchemy import (
+    TIMESTAMP,
+    Column,
+    FetchedValue,
+    ForeignKey,
+    Integer,
+    MetaData,
+    Table,
+    Text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 
 metadata = MetaData()
@@ -20,15 +29,21 @@ stock = Table(
     Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=FetchedValue()),
 )
 
-# One row per order whose stock was reserved (migration 0003).
+# One row per order inventory has handled (migration 0003), with its outcome
+# (migration 0004): RESERVED, or FAILED with a reason.
+RESERVED = "RESERVED"
+FAILED = "FAILED"
+
 reservations = Table(
     "reservations",
     metadata,
     Column("order_id", UUID(as_uuid=True), primary_key=True),
+    Column("status", Text, nullable=False),
+    Column("failure_reason", Text),
     Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=FetchedValue()),
 )
 
-# Which books, and how many of each, a reservation took out of stock.
+# Which books, and how many of each, a reservation took out of stock (none if FAILED).
 reservation_items = Table(
     "reservation_items",
     metadata,

@@ -3,15 +3,29 @@
 Owns stock levels (how many copies of each book can still be sold). It knows book ids
 only — titles and prices belong to catalog.
 
-In roadmap step 3 the order service calls it over HTTP. From step 4 on it talks to
-RabbitMQ only (it reserves stock when it receives `OrderCreated`).
+It reserves stock when it receives an `OrderCreated` event and answers with
+`StockReserved` or `StockFailed` (the checkout saga in `CLAUDE.md`, roadmap step 4).
+
+## Events
+
+| Direction | Event           | Queue / routing key                      | Payload                    |
+|-----------|-----------------|------------------------------------------|----------------------------|
+| in        | `OrderCreated`  | queue `inventory.order-created` (durable) | `orderId, userId, items[{bookId, qty}]` |
+| out       | `StockReserved` | routing key `StockReserved`              | `orderId`                  |
+| out       | `StockFailed`   | routing key `StockFailed`                | `orderId, reason` (`INSUFFICIENT_STOCK`) |
+
+How it works (`app/consumer.py`): reserve, publish the answer (same `correlationId`),
+then ack. A repeated `OrderCreated` gets the same answer again without touching stock.
+Unreadable messages are dropped with an error log; temporary trouble (DB/broker down)
+puts the message back after 2s. The consumer connects in the background and retries
+every 3s, so inventory starts even while RabbitMQ is down.
 
 ## Endpoints
 
 | Method | Path                       | Description                                         |
 |--------|----------------------------|-----------------------------------------------------|
 | GET    | `/health/live`             | Process is up (no dependency checks)                |
-| GET    | `/health/ready`            | Database reachable (200), otherwise 503             |
+| GET    | `/health/ready`            | Database reachable and consumer connected to RabbitMQ (200), otherwise 503 |
 | GET    | `/stock/{bookId}`          | `{bookId, quantity}`; 404 `STOCK_NOT_FOUND` if no record |
 | PUT    | `/stock/{bookId}`          | Body `{"quantity": N}` (0–1,000,000): **sets** the count (creates the record if needed) |
 | PUT    | `/reservations/{orderId}`  | Body `{"items": [{"bookId", "quantity"}]}`: reserve all items or none |
@@ -21,7 +35,9 @@ RabbitMQ only (it reserves stock when it receives `OrderCreated`).
 - **201**: reserved; the copies are taken out of stock.
 - **200**: this order already had exactly this reservation; nothing changes (safe retry).
 - **409 `INSUFFICIENT_STOCK`**: some book is short (or has no stock record). Nothing
-  is reserved; `details` names the book. The same order id may try again later.
+  is reserved; `details` names the book (first attempt only). The failure is
+  **remembered**: the same order id gets the same answer later, even after new stock
+  arrives (needed for repeated events; migration `0004`).
 - **409 `RESERVATION_CONFLICT`**: this order id already reserved *different* items.
 - **400 `VALIDATION_ERROR`**: empty list, quantity outside 1–99, a book listed twice, bad id.
 
@@ -40,8 +56,9 @@ curl -X PUT localhost:8003/stock/<bookId> -H 'content-type: application/json' -d
 
 Table `stock`: `book_id` (catalog's id, no foreign key — that table is in another
 database), `quantity` (never below 0, enforced by a DB check), `updated_at`.
-Tables `reservations` (`order_id` primary key) and `reservation_items` (`order_id`,
-`book_id`, `quantity`) record what each order took (migration `0003`).
+Tables `reservations` (`order_id` primary key, `status` `RESERVED`/`FAILED`,
+`failure_reason`) and `reservation_items` (`order_id`, `book_id`, `quantity`) record
+each order's outcome and what it took (migrations `0003`, `0004`).
 
 Migration `0002` seeds stock for catalog's six demo books: 10 each for books 1–2, 5 for
 3–4, **2 for Dracula (…0005)** and **0 for Dorian Gray (…0006)**, so "out of stock" is
@@ -58,6 +75,7 @@ docker compose exec inventory-db psql -U inventory -d inventory_db -c 'select * 
 | `PORT`         | `8003`     | HTTP port                                                |
 | `LOG_LEVEL`    | `INFO`     | Log level (`DEBUG` also shows health-check requests)     |
 | `DATABASE_URL` | (required) | `postgresql+asyncpg://user:pass@host:5432/inventory_db`  |
+| `RABBITMQ_URL` | (required) | `amqp://user:pass@rabbitmq:5672/`                        |
 
 ## Run locally
 

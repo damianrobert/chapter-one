@@ -132,3 +132,12 @@ def test_bad_order_created_payloads_are_refused(change):
     data = {"orderId": ORDER_ID, "userId": USER_ID, "items": [{"bookId": BOOK_ID, "qty": 1}]}
     with pytest.raises(ValidationError):
         OrderCreatedPayload.model_validate(data | change)
+
+
+def test_stock_reply_payloads_as_json():
+    from shared.events import StockFailedPayload, StockReservedPayload
+
+    assert StockReservedPayload(order_id=uuid.UUID(ORDER_ID)).to_dict() == {"orderId": ORDER_ID}
+    assert StockFailedPayload(
+        order_id=uuid.UUID(ORDER_ID), reason="INSUFFICIENT_STOCK"
+    ).to_dict() == {"orderId": ORDER_ID, "reason": "INSUFFICIENT_STOCK"}
