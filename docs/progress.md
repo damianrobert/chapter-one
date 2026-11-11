@@ -6,7 +6,7 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 ## Current status
 
 - **Roadmap step:** 3 in progress (Order service calling Inventory synchronously)
-- **Next piece:** step 3, piece 3 — order service skeleton with its own Postgres
+- **Next piece:** step 3, piece 4 — `POST /orders` (read cart, copy prices, reserve via inventory)
 - **Last updated:** 2026-11-11
 
 ## Step 1 — Catalog service
@@ -45,8 +45,8 @@ Step 4 replaces that call with events.
 | #  | Piece                                                                 | Status  | Commit    |
 |----|-----------------------------------------------------------------------|---------|-----------|
 | 1  | Inventory skeleton: own Postgres, `stock` table + seed, health, logs, Compose | done | `e4928a2` |
-| 2  | Inventory endpoints: get/set stock, reserve stock atomically (hard rule 5) | done |          |
-| 3  | Order skeleton: own Postgres, `orders` + `order_items` tables         | planned |           |
+| 2  | Inventory endpoints: get/set stock, reserve stock atomically (hard rule 5) | done | `60f1363` |
+| 3  | Order skeleton: own Postgres, `orders` + `order_items` tables         | done    |           |
 | 4  | `POST /orders`: read cart, copy prices, call inventory, CONFIRMED/CANCELLED; `GET /orders` | planned | |
 | 5  | Gateway forwards `/api/orders`; settle the timeout budget between services | planned |       |
 | 6  | Break it on purpose (pause inventory), learning guide `step-3-...md`  | planned |           |
@@ -160,6 +160,15 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 - Inventory's `ApiError` accepts optional `details` (catalog's and cart's don't need it).
 - A test fires 8 simultaneous reservations for Dracula (2 in stock) and checks exactly 2
   succeed.
+- Order listens on 8004 with its own Postgres (`order-db`, `order_db`), another copy of
+  the same skeleton. Compose doesn't give it cart's/inventory's URLs yet (piece 4).
+- `orders`: status limited to `PENDING`/`CONFIRMED`/`CANCELLED` by a DB check;
+  `cancel_reason` allowed only on cancelled orders; `total_minor` is BIGINT (a total can
+  exceed one INTEGER price); one currency per order (the cart already enforces that).
+  Index `(user_id, created_at)` for "my orders, newest first".
+- `order_items`: copies `title`, `author`, `unit_price_minor` at checkout (hard rule 2);
+  `book_id` is kept for reference but never used to re-read catalog for an old order.
+  Primary key `(order_id, book_id)`: one line per book, as in the cart.
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 

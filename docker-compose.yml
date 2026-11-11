@@ -156,8 +156,46 @@ services:
       timeout: 3s
       retries: 10
 
+  # Orders and their status. In the next piece it gets the cart's and inventory's
+  # addresses so it can place orders.
+  order:
+    build: ./services/order
+    image: chapter-one/order
+    environment:
+      PORT: 8004
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${ORDER_DB_USER:-order}:${ORDER_DB_PASSWORD:-order}@order-db:5432/${ORDER_DB_NAME:-order_db}
+    ports:
+      - "${ORDER_PORT:-8004}:8004"
+    depends_on:
+      order-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health/live', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # Order's own database (hard rule: no shared databases). No host port; to inspect it use
+  #   docker compose exec order-db psql -U order -d order_db
+  order-db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${ORDER_DB_USER:-order}
+      POSTGRES_PASSWORD: ${ORDER_DB_PASSWORD:-order}
+      POSTGRES_DB: ${ORDER_DB_NAME:-order_db}
+    volumes:
+      - order-db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   # Named volumes: data survives `docker compose down`; `down -v` deletes it.
   catalog-db-data:
   cart-redis-data:
   inventory-db-data:
+  order-db-data:
