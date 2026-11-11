@@ -21,5 +21,9 @@ class Settings(BaseSettings):
     # exists and what it costs. Required for the same reason as REDIS_URL.
     catalog_url: str
 
+    # env: RABBITMQ_URL, e.g. amqp://user:pass@rabbitmq:5672/ — cart listens for
+    # OrderConfirmed there and empties the user's cart (app/consumer.py).
+    rabbitmq_url: str
+
 
 settings = Settings()

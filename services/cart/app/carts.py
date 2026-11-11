@@ -142,6 +142,44 @@ async def set_item_quantity(
     return await load_cart(redis, user_id)
 
 
+# --- emptying a cart after an order (called by app/consumer.py, not by an endpoint) ---
+
+# Marks that the cart was already emptied for an order: `cart-emptied-for:<orderId>`.
+# Kept 7 days, as long as a cart lives; a repeat of the same event days later is
+# very unlikely, and the marker shouldn't pile up in Redis forever.
+EMPTIED_MARKER_TTL_SECONDS = 7 * 24 * 60 * 60
+
+# A Lua script runs inside Redis as ONE step: nothing else happens in between.
+# "Set the marker if it isn't there yet (NX); only if we set it, delete the cart."
+# Returns 1 if this call emptied the cart, 0 if the order was handled before.
+#
+# Why not two separate commands? If cart crashed after setting the marker but before
+# deleting, the repeat would see the marker and never empty the cart. And MULTI/EXEC
+# (used above) can't help here: it runs every command, it can't say "delete only if
+# the marker was new".
+_EMPTY_ONCE = """
+if redis.call('SET', KEYS[1], '1', 'NX', 'EX', ARGV[1]) then
+    redis.call('DEL', KEYS[2])
+    return 1
+end
+return 0
+"""
+
+
+async def empty_cart_for_order(redis: Redis, user_id: UUID, order_id: UUID) -> bool:
+    """Empty the user's cart because `order_id` was confirmed. Safe to repeat.
+
+    Returns True if this call emptied it, False if this order was handled before
+    (a repeated OrderConfirmed). Why not just DEL the cart every time? A repeat
+    arriving after the user filled a *new* cart would delete those new books.
+    """
+    marker = f"cart-emptied-for:{order_id}"
+    emptied = await redis.eval(
+        _EMPTY_ONCE, 2, marker, cart_key(user_id), EMPTIED_MARKER_TTL_SECONDS
+    )
+    return emptied == 1
+
+
 @router.delete("/{user_id}/items/{book_id}", status_code=204)
 async def remove_item(user_id: UUID, book_id: UUID, redis: RedisClient) -> Response:
     # Removing a book that isn't in the cart is not an error: the result the client

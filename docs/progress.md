@@ -6,9 +6,10 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 ## Current status
 
 - **Roadmap step:** 4 in progress (replace order → inventory call with RabbitMQ events)
-- **Next piece:** step 4, piece 5 — cart consumes `OrderConfirmed` and empties the
-  user's cart. The saga itself now works end to end: a new order becomes `CONFIRMED` or
-  `CANCELLED` within a fraction of a second.
+- **Next piece:** step 4, piece 6 — decide about inventory's HTTP reservation endpoint,
+  break the system on purpose again (compare with step 3), learning guide
+  `step-4-...md`. Checkout now works fully over events: order confirmed or cancelled
+  within a fraction of a second, cart emptied on confirmation.
 - **Last updated:** 2026-11-11
 
 ## Step 1 — Catalog service
@@ -66,7 +67,7 @@ Draft plan; adjust as we go. Outbox and Notification are step 5.
 | 2  | Order publishes `OrderCreated`; `POST /orders` answers 202 with a PENDING order (HTTP call to inventory removed) | done | |
 | 3  | Inventory consumes `OrderCreated`, reserves, publishes `StockReserved` / `StockFailed`; failed reservations remembered | done | |
 | 4  | Order consumes the replies → CONFIRMED / CANCELLED, publishes `OrderConfirmed` / `OrderCancelled` | done | |
-| 5  | Cart consumes `OrderConfirmed` and empties the cart                   | planned |           |
+| 5  | Cart consumes `OrderConfirmed` and empties the cart                   | done    |           |
 | 6  | Decide about inventory's HTTP reservation endpoint, break it again, learning guide `step-4-...md` | planned | |
 
 ## Decisions made along the way
@@ -317,6 +318,22 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   CONFIRMED ~60ms later; Dorian Gray → CANCELLED `INSUFFICIENT_STOCK`; same
   correlationId on OrderCreated → StockReserved → OrderConfirmed. Orders placed before
   this piece stay PENDING (their answers were dropped: no queue existed yet).
+- Cart's consumer (`services/cart/app/consumer.py`, step 4 piece 5): durable queue
+  `cart.order-confirmed`, prefetch 10, same shape as the other two consumers; publishes
+  nothing. Cart now needs `RABBITMQ_URL`, aio-pika and `shared/` (same build-context
+  setup as order/inventory). `/health/ready` gains `checks.consumer`.
+- Emptying is **once per order id**: a Lua script (atomic in Redis) sets
+  `cart-emptied-for:<orderId>` with `NX` + 7-day expiry and deletes `cart:<userId>`
+  only if the marker was new. A plain `DEL` would be "safe" to repeat but a late repeat
+  would wipe a *new* cart. Keyed by order id, not event id, because order may
+  re-publish `OrderConfirmed` with a new event id. MULTI/EXEC can't do "delete only if",
+  hence the script.
+- The **whole** cart is emptied, including books added between placing the order and
+  its confirmation (normally ~60ms, longer if inventory is down). Accepted for now;
+  the fix would be putting the ordered items in `OrderConfirmed` and removing only those.
+- `OrderCancelled` doesn't touch the cart: the books stay so the user can try again.
+- Checked 2026-11-11 against Compose through the gateway: confirmed order → cart empty
+  ~1s later; cancelled order → book still in the cart.
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 
@@ -338,11 +355,12 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   remove it once the consumer exists? Decide in piece 6.
 - Unreadable events are dropped (logged). A dead-letter queue would keep them for
   inspection; consider in step 5. Until then such an order stays `PENDING`.
-- `OrderConfirmed` / `OrderCancelled` are published but nobody listens until piece 5 /
-  step 5 (warnings "event not delivered to any queue" in order's log are expected).
-- Consumer plumbing (connect loop, stop, in-progress count) is now copied in inventory
-  and order. Cart (piece 5) would make three copies: consider moving it into
-  `shared/messaging.py` then.
+- `OrderCancelled` has no listener until notification (step 5): warnings "event not
+  delivered to any queue" for it in order's log are expected.
+- Consumer plumbing (connect loop, stop, in-progress count) is now copied in three
+  services (inventory, order, cart), ~80 lines each. Kept as copies in piece 5 so the
+  piece stayed inside cart. Moving it into `shared/messaging.py` is a good small
+  refactor before notification makes four — decide at the start of step 5.
 - A repeated answer re-publishes the follow-up with a **new** `eventId`, so a consumer
   can't spot the repeat by `eventId` alone. Notification (step 5) should dedupe by order
   id + event type, or the outbox can give the repeat the same `eventId`.

@@ -79,7 +79,10 @@ services:
       retries: 10
 
   cart:
-    build: ./services/cart
+    build:
+      context: ./services/cart
+      additional_contexts:
+        shared: ./shared  # the event envelope; see the order service below
     image: chapter-one/cart
     environment:
       PORT: 8002
@@ -88,6 +91,8 @@ services:
       REDIS_URL: redis://cart-redis:6379/0
       # The cart asks catalog whether a book exists and what it costs.
       CATALOG_URL: http://catalog:8001
+      # Cart listens for OrderConfirmed and empties the cart.
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-chapter-one}:${RABBITMQ_PASSWORD:-chapter-one}@rabbitmq:5672/
     ports:
       - "${CART_PORT:-8002}:8002"
     # Like catalog: start once Redis answers. The cart copes with Redis being down
@@ -98,6 +103,9 @@ services:
       cart-redis:
         condition: service_healthy
       catalog:
+        condition: service_started
+      # Only "started": the consumer keeps retrying until RabbitMQ answers.
+      rabbitmq:
         condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health/live', timeout=2)"]

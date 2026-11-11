@@ -1,8 +1,8 @@
 """The cart service: what each user has put in their cart, stored in Redis.
 
-This file wires things together: Redis and HTTP clients, health checks, request
-logging. The cart endpoints are in app/carts.py; calls to catalog in
-app/catalog_client.py.
+This file wires things together: Redis and HTTP clients, the event consumer, health
+checks, request logging. The cart endpoints are in app/carts.py; calls to catalog in
+app/catalog_client.py; emptying the cart after an order in app/consumer.py.
 """
 
 import logging
@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 
 from app import carts, catalog_client, redis_client
 from app.config import settings
+from app.consumer import OrderConfirmedConsumer
 from app.errors import register_error_handlers
 
 logger = logging.getLogger(__name__)
@@ -26,8 +27,13 @@ async def lifespan(app: FastAPI):
     # a pool of open connections that all requests share.
     app.state.redis = redis_client.create_client(settings.redis_url)
     app.state.http_client = catalog_client.create_client()
+    # Empties carts when orders are confirmed; connects in the background (app/consumer.py).
+    app.state.consumer = OrderConfirmedConsumer(settings.rabbitmq_url, app.state.redis)
+    app.state.consumer.start()
     yield
-    # Shutdown (e.g. SIGTERM): runs after in-flight requests finished; close connections.
+    # Shutdown (e.g. SIGTERM): runs after in-flight requests finished. Stop taking
+    # events first (they use Redis), then close connections.
+    await app.state.consumer.stop()
     await app.state.http_client.aclose()
     await app.state.redis.aclose()
 
@@ -76,13 +82,16 @@ async def ready(request: Request) -> JSONResponse:
     # Readiness: "can I serve traffic right now?" The cart is useless without Redis,
     # so Redis must answer. (Catalog is NOT checked here even though the cart will
     # call it — same reasoning as the gateway: one broken service shouldn't mark
-    # others as not ready.)
+    # others as not ready.) RabbitMQ is checked: without it, confirmed orders don't
+    # empty carts ("consumer").
+    checks = {"redis": "ok", "consumer": "ok"}
     try:
         await redis_client.ping_redis(request.app.state.redis)
     except Exception:
         logger.warning("readiness check failed: redis unreachable", exc_info=True)
-        return JSONResponse(
-            status_code=503,
-            content={"status": "unavailable", "checks": {"redis": "unreachable"}},
-        )
-    return JSONResponse(content={"status": "ok", "checks": {"redis": "ok"}})
+        checks["redis"] = "unreachable"
+    if not request.app.state.consumer.is_consuming():
+        checks["consumer"] = "unreachable"
+    if all(result == "ok" for result in checks.values()):
+        return JSONResponse(content={"status": "ok", "checks": checks})
+    return JSONResponse(status_code=503, content={"status": "unavailable", "checks": checks})

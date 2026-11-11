@@ -36,21 +36,6 @@ def catalog_book(book_id, title, price_minor, currency="EUR"):
     }
 
 
-@pytest.fixture(scope="session")
-def redis_url():
-    """One throwaway Redis for the whole test run, deleted when tests finish.
-
-    Separate from docker-compose's cart-redis, so tests never touch your local carts.
-    """
-    from testcontainers.community.redis import RedisContainer
-
-    # Same image as docker-compose.yml, so tests match what really runs.
-    with RedisContainer("redis:8-alpine") as container:
-        host = container.get_container_host_ip()
-        port = container.get_exposed_port(6379)
-        yield f"redis://{host}:{port}/0"
-
-
 @pytest.fixture
 def raw_redis(redis_url):
     """A plain Redis client, to look at what the API stored."""

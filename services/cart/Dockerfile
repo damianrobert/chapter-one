@@ -24,6 +24,9 @@ RUN groupadd --system --gid 10001 app \
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY app ./app
+# The shared event definitions (repo-root shared/), handed in by docker-compose.yml as
+# the extra build context "shared" (same as order and inventory). Code files only.
+COPY --from=shared __init__.py events.py messaging.py ./shared/
 
 USER 10001
 
