@@ -41,7 +41,11 @@ class ReservationItem(BaseModel):
 
 
 class ReservationRequest(BaseModel):
-    """Body of PUT /reservations/{orderId}."""
+    """The items of an OrderCreated event, checked (app/consumer.py).
+
+    Was the body of step 3's `PUT /reservations/{orderId}`; the endpoint is gone, the
+    checks are still wanted.
+    """
 
     model_config = ConfigDict(alias_generator=to_camel, extra="forbid")
 
@@ -51,17 +55,8 @@ class ReservationRequest(BaseModel):
     @classmethod
     def each_book_once(cls, items: list[ReservationItem]) -> list[ReservationItem]:
         # One line per book. Two lines for the same book would make the "is this the
-        # same request again?" check (see reservations.py) ambiguous.
+        # same order again?" check (see reservations.py) ambiguous.
         book_ids = [item.book_id for item in items]
         if len(book_ids) != len(set(book_ids)):
             raise ValueError("each bookId may appear only once")
         return items
-
-
-class Reservation(BaseModel):
-    """PUT /reservations/{orderId} response."""
-
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-
-    order_id: UUID
-    items: list[ReservationItem]

@@ -1,9 +1,9 @@
 """Reserving stock for an order: all books or none, and safe to repeat.
 
 Inventory reserves stock when it receives an `OrderCreated` event (app/consumer.py).
-`PUT /reservations/{orderId}` does the same over HTTP; it's left from step 3 and handy
-for trying things by hand. Three things make this correct even with many orders
-arriving at the same moment:
+That's the only way in: step 3's `PUT /reservations/{orderId}` was removed in step 4,
+so copies are only ever reserved because an order was placed. Three things make this
+correct even with many orders arriving at the same moment:
 
 1. **Atomic, conditional updates (hard rule 5).** For each book we run
 
@@ -21,11 +21,10 @@ arriving at the same moment:
 
 3. **Repeating is harmless (idempotent, hard rule 3).** The order id is the
    reservation's primary key, and the outcome is stored **either way**: RESERVED or
-   FAILED. If the same order asks again (RabbitMQ delivered OrderCreated twice, or an
-   HTTP retry), we find the stored outcome and give the same answer, without
-   touching stock. Storing failures matters: otherwise a repeat after new stock came
-   in could reserve copies for an order that was already turned down (migration 0004
-   explains this).
+   FAILED. If the same order asks again (RabbitMQ delivered OrderCreated twice), we
+   find the stored outcome and give the same answer, without touching stock. Storing
+   failures matters: otherwise a repeat after new stock came in could reserve copies
+   for an order that was already turned down (migration 0004 explains this).
 
 There's no "release" yet: copies reserved for an order stay reserved. Giving copies
 back (e.g. for a cancelled order) is a later concern.
@@ -34,18 +33,13 @@ back (e.g. for a cancelled order) is a later concern.
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from fastapi import APIRouter, Response
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from app.db import Engine
-from app.errors import ApiError
-from app.schemas import Reservation, ReservationItem, ReservationRequest
+from app.schemas import ReservationItem
 from app.tables import FAILED, RESERVED, reservation_items, reservations, stock
 from shared.events import INSUFFICIENT_STOCK
-
-router = APIRouter(prefix="/reservations", tags=["reservations"])
 
 
 @dataclass(frozen=True)
@@ -63,8 +57,8 @@ class ReservationOutcome:
 class ReservationConflict(Exception):
     """This order id already has a reservation with different items.
 
-    Can't happen through events (an order's items never change); only if someone
-    reuses an order id by hand over HTTP.
+    Can't happen in normal use (an order's items never change); only if someone
+    publishes a hand-made OrderCreated reusing an order id.
     """
 
 
@@ -177,23 +171,3 @@ def _same_items(a: list[ReservationItem], b: list[ReservationItem]) -> bool:
         return {i.book_id: i.quantity for i in items}
 
     return as_dict(a) == as_dict(b)
-
-
-@router.put("/{order_id}", response_model=Reservation)
-async def put_reservation(
-    order_id: UUID, body: ReservationRequest, response: Response, engine: Engine
-) -> Reservation:
-    try:
-        outcome = await reserve_stock(engine, order_id, body.items)
-    except ReservationConflict as exc:
-        raise ApiError(409, "RESERVATION_CONFLICT", str(exc)) from exc
-    if not outcome.reserved:
-        raise ApiError(
-            409,
-            outcome.failure_reason,
-            f"Not enough stock for order {order_id}",
-            details=outcome.failure_details,
-        )
-    # 201 the first time, 200 when it already existed — the body is the same either way.
-    response.status_code = 201 if outcome.created else 200
-    return Reservation(order_id=order_id, items=outcome.items)

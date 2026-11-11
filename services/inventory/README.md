@@ -28,25 +28,24 @@ every 3s, so inventory starts even while RabbitMQ is down.
 | GET    | `/health/ready`            | Database reachable and consumer connected to RabbitMQ (200), otherwise 503 |
 | GET    | `/stock/{bookId}`          | `{bookId, quantity}`; 404 `STOCK_NOT_FOUND` if no record |
 | PUT    | `/stock/{bookId}`          | Body `{"quantity": N}` (0–1,000,000): **sets** the count (creates the record if needed) |
-| PUT    | `/reservations/{orderId}`  | Body `{"items": [{"bookId", "quantity"}]}`: reserve all items or none |
 
-`PUT /reservations/{orderId}`:
+Reserving stock has **no HTTP endpoint**: it only happens when an `OrderCreated` event
+arrives (see above). Step 3's `PUT /reservations/{orderId}` was removed in step 4, so
+copies are only ever reserved for an order that was really placed. To try it by hand,
+place an order through the gateway, or publish an `OrderCreated` from the RabbitMQ
+dashboard (http://localhost:15672 → Exchanges → `chapter-one.events` → Publish
+message, routing key `OrderCreated`).
 
-- **201**: reserved; the copies are taken out of stock.
-- **200**: this order already had exactly this reservation; nothing changes (safe retry).
-- **409 `INSUFFICIENT_STOCK`**: some book is short (or has no stock record). Nothing
-  is reserved; `details` names the book (first attempt only). The failure is
-  **remembered**: the same order id gets the same answer later, even after new stock
-  arrives (needed for repeated events; migration `0004`).
-- **409 `RESERVATION_CONFLICT`**: this order id already reserved *different* items.
-- **400 `VALIDATION_ERROR`**: empty list, quantity outside 1–99, a book listed twice, bad id.
+Rules (same as in step 3, now for events): all books or none; a book with too few
+copies or no stock record fails the order with `INSUFFICIENT_STOCK`; the outcome is
+**remembered** per order id, so a repeated event gets the same answer, even after new
+stock arrives (migration `0004`).
 
 How it stays correct under load is explained at the top of `app/reservations.py`
 (conditional `UPDATE`, one transaction, order id as primary key).
 
-The gateway doesn't route to inventory. Since step 4 the order service no longer calls it
-either (it publishes `OrderCreated` instead; inventory consumes it from piece 3 on). Locally you can
-call port 8003 directly, e.g. to stock a book created with `POST /api/books`:
+The gateway doesn't route to inventory, and no service calls it over HTTP any more.
+Locally you can call port 8003 directly, e.g. to stock a book created with `POST /api/books`:
 
 ```bash
 curl -X PUT localhost:8003/stock/<bookId> -H 'content-type: application/json' -d '{"quantity": 5}'

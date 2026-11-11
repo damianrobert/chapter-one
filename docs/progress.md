@@ -5,11 +5,11 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 
 ## Current status
 
-- **Roadmap step:** 4 in progress (replace order → inventory call with RabbitMQ events)
-- **Next piece:** step 4, piece 6 — decide about inventory's HTTP reservation endpoint,
-  break the system on purpose again (compare with step 3), learning guide
-  `step-4-...md`. Checkout now works fully over events: order confirmed or cancelled
-  within a fraction of a second, cart emptied on confirmation.
+- **Roadmap step:** 4 done; step 5 next (outbox, idempotent consumers, notification)
+- **Next piece:** plan step 5's pieces. Candidates, in order: move the copied consumer
+  plumbing into `shared/messaging.py`; outbox table + publishing worker in order (then
+  inventory); notification service consuming `OrderConfirmed`/`OrderCancelled`; consider
+  a dead-letter queue.
 - **Last updated:** 2026-11-11
 
 ## Step 1 — Catalog service
@@ -68,7 +68,10 @@ Draft plan; adjust as we go. Outbox and Notification are step 5.
 | 3  | Inventory consumes `OrderCreated`, reserves, publishes `StockReserved` / `StockFailed`; failed reservations remembered | done | |
 | 4  | Order consumes the replies → CONFIRMED / CANCELLED, publishes `OrderConfirmed` / `OrderCancelled` | done | |
 | 5  | Cart consumes `OrderConfirmed` and empties the cart                   | done    |           |
-| 6  | Decide about inventory's HTTP reservation endpoint, break it again, learning guide `step-4-...md` | planned | |
+| 6  | Inventory's HTTP reservation endpoint removed, break it again, learning guide | done | |
+
+Learning guide for this step: `docs/learning/step-4-events-saga.md` (Part 4 has the
+break-it results compared with step 3).
 
 ## Decisions made along the way
 
@@ -334,6 +337,18 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 - `OrderCancelled` doesn't touch the cart: the books stay so the user can try again.
 - Checked 2026-11-11 against Compose through the gateway: confirmed order → cart empty
   ~1s later; cancelled order → book still in the cart.
+- Inventory's `PUT /reservations/{orderId}` was **removed** (user's choice, 2026-11-11):
+  reservations only come from `OrderCreated`, so books can't be reserved for an order
+  that doesn't exist. `reserve_stock()` and `ReservationRequest` (now the check for an
+  event's items) stay; `test_reservations_api.py` became `test_reservations.py`, calling
+  `reserve_stock()` directly. Manual tests: order through the gateway, or publish from
+  the RabbitMQ dashboard.
+- Step 4 break-it results (2026-11-11, full table in the step-4 guide): normal → 202 in
+  ~0.03s, CONFIRMED within 0.3s; inventory off / its DB off / **frozen** → 202 PENDING,
+  then CONFIRMED once it's back (**step 3's lost answer is fixed**); order or cart off
+  while events flow → notes wait in their queue, handled on restart; **RabbitMQ off →
+  503, order stuck PENDING** (outbox gap); rush 6 × 2 copies → 2 CONFIRMED; ordering
+  twice in a row → second is 409 `CART_EMPTY`; **double click → two orders**.
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 
@@ -351,8 +366,6 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   a deadline along with each request would automate it; not needed yet.
 - Orders left `PENDING` because the event couldn't be published stay stuck forever
   (nothing re-sends it). Step 5's outbox fixes this.
-- Inventory's HTTP `PUT /reservations/{orderId}`: keep it (handy for manual tests) or
-  remove it once the consumer exists? Decide in piece 6.
 - Unreadable events are dropped (logged). A dead-letter queue would keep them for
   inspection; consider in step 5. Until then such an order stays `PENDING`.
 - `OrderCancelled` has no listener until notification (step 5): warnings "event not
@@ -364,5 +377,5 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 - A repeated answer re-publishes the follow-up with a **new** `eventId`, so a consumer
   can't spot the repeat by `eventId` alone. Notification (step 5) should dedupe by order
   id + event type, or the outbox can give the repeat the same `eventId`.
-- Double-clicking "order" places two orders (no idempotency key on `POST /orders`).
-  Consider an `Idempotency-Key` header later.
+- Double-clicking "order" places two orders (no idempotency key on `POST /orders`);
+  confirmed in step 4's break-it test. Consider an `Idempotency-Key` header later.
