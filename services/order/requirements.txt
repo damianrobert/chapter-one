@@ -5,4 +5,5 @@ pydantic-settings==2.16.2
 sqlalchemy[asyncio]==2.1.6
 asyncpg==0.32.0
 alembic==1.20.1
-httpx2==2.16.0  # calls to cart and inventory
+httpx2==2.16.0  # calls to cart
+aio-pika==10.2.3  # publishes events to RabbitMQ

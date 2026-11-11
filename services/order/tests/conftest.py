@@ -8,10 +8,10 @@ import pytest
 # Tests that don't use the `database_url` fixture never connect to it: the engine
 # connects lazily, and the health tests fake the DB ping.
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
-# Cart and inventory are faked in the tests (httpx2 MockTransport); these URLs are
-# never really called.
+# Cart is faked in the tests (httpx2 MockTransport) and so is the event publisher,
+# except in test_events.py, which starts a real RabbitMQ. These are never contacted.
 os.environ.setdefault("CART_URL", "http://cart.test")
-os.environ.setdefault("INVENTORY_URL", "http://inventory.test")
+os.environ.setdefault("RABBITMQ_URL", "amqp://test:test@localhost:1/")
 
 from alembic import command  # noqa: E402  (must come after DATABASE_URL is set)
 from alembic.config import Config  # noqa: E402
@@ -60,3 +60,14 @@ def empty_database(database_url):
     """The throwaway Postgres's URL; its tables are emptied after the test."""
     yield database_url
     asyncio.run(_empty_tables(database_url))
+
+
+@pytest.fixture(scope="session")
+def rabbitmq_url():
+    """Start a throwaway RabbitMQ in Docker for the test run; yield its amqp:// URL."""
+    from testcontainers.community.rabbitmq import RabbitMqContainer
+
+    # Same RabbitMQ version as docker-compose.yml (without the dashboard, not needed).
+    with RabbitMqContainer("rabbitmq:4-alpine") as rabbitmq:
+        params = rabbitmq.get_connection_params()
+        yield (f"amqp://{rabbitmq.username}:{rabbitmq.password}@{params.host}:{params.port}/")

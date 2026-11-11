@@ -120,8 +120,8 @@ services:
       timeout: 3s
       retries: 10
 
-  # Stock levels. In roadmap step 3 the order service will call it over HTTP; in step 4
-  # that call is replaced by events and inventory talks to RabbitMQ only.
+  # Stock levels. In step 3 order called it over HTTP; in step 4 that's replaced by
+  # events, and inventory will talk to RabbitMQ only (piece 3).
   inventory:
     build: ./services/inventory
     image: chapter-one/inventory
@@ -158,27 +158,32 @@ services:
       timeout: 3s
       retries: 10
 
-  # Orders and their status. At checkout it reads the cart and (step 3) asks inventory
-  # over HTTP to reserve the books.
+  # Orders and their status. At checkout it reads the cart, saves the order as PENDING
+  # and publishes OrderCreated to RabbitMQ (step 4; no more HTTP call to inventory).
   order:
-    build: ./services/order
+    build:
+      context: ./services/order
+      # Extra folder for the build: the Dockerfile copies the event envelope from it
+      # (COPY --from=shared). The image still builds from its own folder otherwise.
+      additional_contexts:
+        shared: ./shared
     image: chapter-one/order
     environment:
       PORT: 8004
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: postgresql+asyncpg://${ORDER_DB_USER:-order}:${ORDER_DB_PASSWORD:-order}@order-db:5432/${ORDER_DB_NAME:-order_db}
       CART_URL: http://cart:8002
-      INVENTORY_URL: http://inventory:8003
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-chapter-one}:${RABBITMQ_PASSWORD:-chapter-one}@rabbitmq:5672/
     ports:
       - "${ORDER_PORT:-8004}:8004"
-    # Cart and inventory: only "started", not "healthy" — order must cope with them
-    # being down anyway (it answers 503).
+    # Cart and RabbitMQ: only "started", not "healthy" — order must cope with them
+    # being down anyway (it answers 503; /health/ready shows the broker as unreachable).
     depends_on:
       order-db:
         condition: service_healthy
       cart:
         condition: service_started
-      inventory:
+      rabbitmq:
         condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health/live', timeout=2)"]

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app import clients, db, orders
+from app import clients, db, events, orders
 from app.config import settings
 from app.errors import register_error_handlers
 
@@ -17,11 +17,14 @@ request_logger = logging.getLogger("app.requests")
 async def lifespan(app: FastAPI):
     # Startup: runs once before the first request is accepted.
     app.state.engine = db.create_engine(settings.database_url)
-    # One HTTP client for calls to cart and inventory; it keeps connections open.
+    # One HTTP client for calls to cart; it keeps connections open.
     app.state.http_client = clients.create_client()
+    # Publishes events to RabbitMQ. Doesn't connect yet (see app/events.py).
+    app.state.publisher = events.EventPublisher(settings.rabbitmq_url, settings.service_name)
     yield
     # Shutdown: runs after uvicorn has stopped accepting requests and in-flight
     # requests finished (e.g. on SIGTERM). Close connections cleanly.
+    await app.state.publisher.close()
     await app.state.http_client.aclose()
     await app.state.engine.dispose()
 
@@ -65,13 +68,22 @@ async def live() -> dict:
 
 @app.get("/health/ready")
 async def ready(request: Request) -> JSONResponse:
-    # Readiness: "can I serve real traffic right now?" Checks the database.
+    # Readiness: "can I serve real traffic right now?" Checks the database and RabbitMQ:
+    # without the broker, placing an order fails. (Not cart: like the gateway, order
+    # stays "ready" when cart is down and answers 503 only where cart is needed.)
+    checks = {
+        "database": await _check("database", db.ping_database(request.app.state.engine)),
+        "broker": await _check("broker", request.app.state.publisher.check()),
+    }
+    if all(result == "ok" for result in checks.values()):
+        return JSONResponse(content={"status": "ok", "checks": checks})
+    return JSONResponse(status_code=503, content={"status": "unavailable", "checks": checks})
+
+
+async def _check(name: str, probe) -> str:
     try:
-        await db.ping_database(request.app.state.engine)
+        await probe
     except Exception:
-        logger.warning("readiness check failed: database unreachable", exc_info=True)
-        return JSONResponse(
-            status_code=503,
-            content={"status": "unavailable", "checks": {"database": "unreachable"}},
-        )
-    return JSONResponse(content={"status": "ok", "checks": {"database": "ok"}})
+        logger.warning("readiness check failed: %s unreachable", name, exc_info=True)
+        return "unreachable"
+    return "ok"

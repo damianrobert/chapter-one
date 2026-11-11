@@ -1,31 +1,18 @@
-"""Calls from order to the cart and inventory services.
+"""Calls from order to the cart service.
 
-Order never reads cart's Redis or inventory's database (hard rule 1). It asks them
-over their public HTTP APIs, like any other client would:
+Order never reads cart's Redis (hard rule 1). It asks over cart's public HTTP API, like
+any other client would: `GET /carts/{userId}`, "what is in this user's cart?"
 
-- **cart:**      `GET /carts/{userId}`             — "what is in this user's cart?"
-- **inventory:** `PUT /reservations/{orderId}`     — "please set these books aside"
+(In step 3 this file also asked inventory to reserve stock over HTTP. From step 4 on,
+order publishes an `OrderCreated` event instead; see app/events.py.)
 
-Hard rule 6 applies to both, the same way as in the gateway and the cart:
+Hard rule 6 applies:
 
-- **A 1.5s budget for each call**, retries and pauses included, so a hung service
-  can't make order hang too. Placing an order makes two calls (cart, then
-  inventory): at most 3s, well inside the 5s the gateway waits for order. See
-  docs/decisions/0002-timeout-budgets.md.
+- **A 1.5s budget for the call**, retries and pauses included, so a hung cart can't
+  make order hang too. See docs/decisions/0002-timeout-budgets.md.
 - **Retry with backoff** (3 attempts, pauses 0.2s then 0.4s), but only when there was
-  no answer at all (connection refused, timeout) and budget is left.
-
-Retrying is only safe because both calls are safe to repeat:
-
-- The cart GET only reads.
-- The inventory PUT is idempotent *by order id*: inventory remembers which order
-  already reserved what (see services/inventory/app/reservations.py). If our first
-  attempt did reserve the books but the answer got lost on the way back, the retry
-  gets "already reserved" (200) instead of taking the copies a second time.
-
-This is the step-3 design and it's fragile on purpose: while order waits for
-inventory, the customer waits for order. Step 4 replaces the inventory call with
-events via RabbitMQ.
+  no answer at all (connection refused, timeout) and budget is left. Safe here because
+  the cart GET only reads.
 """
 
 import asyncio
@@ -47,14 +34,6 @@ class ServiceUnavailable(Exception):
     def __init__(self, service: str, message: str):
         super().__init__(message)
         self.service = service
-
-
-class InsufficientStock(Exception):
-    """Inventory answered: not enough copies of at least one book."""
-
-    def __init__(self, details: list | None):
-        super().__init__("insufficient stock")
-        self.details = details
 
 
 def create_client() -> httpx2.AsyncClient:
@@ -111,30 +90,3 @@ async def get_cart(client: httpx2.AsyncClient, cart_url: str, user_id: UUID) -> 
         )
         raise ServiceUnavailable("cart", f"cart answered {response.status_code}")
     return response.json()
-
-
-async def reserve_stock(
-    client: httpx2.AsyncClient, inventory_url: str, order_id: UUID, items: list[dict]
-) -> None:
-    """Ask inventory to reserve `items` ([{bookId, quantity}]) for this order.
-
-    Returns normally when reserved. Raises InsufficientStock when inventory says no,
-    ServiceUnavailable when we don't know the outcome.
-    """
-    url = f"{inventory_url.rstrip('/')}/reservations/{order_id}"
-    response = await _send(client, "inventory", "PUT", url, json={"items": items})
-
-    # 201 = reserved now, 200 = this order had already reserved exactly this (a retry).
-    if response.status_code in (200, 201):
-        return
-    if response.status_code == 409:
-        error = response.json().get("error", {})
-        if error.get("code") == "INSUFFICIENT_STOCK":
-            raise InsufficientStock(error.get("details"))
-    # Anything else (503, a 409 RESERVATION_CONFLICT that shouldn't happen, ...) means
-    # we can't tell whether the books are reserved.
-    logger.error(
-        "inventory answered with an error",
-        extra={"upstream": "inventory", "status": response.status_code},
-    )
-    raise ServiceUnavailable("inventory", f"inventory answered {response.status_code}")

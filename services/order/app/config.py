@@ -21,9 +21,10 @@ class Settings(BaseSettings):
 
     # env: CART_URL, e.g. http://cart:8002 — at checkout, order reads the user's cart.
     cart_url: str
-    # env: INVENTORY_URL, e.g. http://inventory:8003 — order asks inventory to reserve
-    # stock (step 3 only: from step 4 on this becomes an event instead).
-    inventory_url: str
+    # env: RABBITMQ_URL, e.g. amqp://user:pass@rabbitmq:5672/ — where order publishes
+    # its events (OrderCreated, ...). Replaced step 3's INVENTORY_URL: order no longer
+    # calls inventory, it announces new orders and inventory reacts.
+    rabbitmq_url: str
 
 
 settings = Settings()

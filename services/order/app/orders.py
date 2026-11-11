@@ -1,32 +1,29 @@
 """The order API: place an order from your cart, list your orders, look one up.
 
-## Placing an order (step 3: synchronous on purpose)
+## Placing an order (step 4: with events)
 
-`POST /orders` does everything while the customer waits:
+`POST /orders` no longer waits for inventory. It does only what order itself can do,
+then answers right away:
 
 1. Read the user's cart from the cart service.
 2. Save the order as PENDING, with title, author and price **copied** from the cart
    (hard rule 2). From now on the order never looks at cart or catalog again.
-3. Ask inventory to reserve the books, and wait for the answer.
-4. Inventory said yes  -> CONFIRMED.
-   Inventory said no   -> CANCELLED, reason INSUFFICIENT_STOCK.
-   Inventory is down   -> the order stays PENDING and the client gets 503.
+3. Publish an `OrderCreated` event to RabbitMQ ("this order needs these books").
+4. Answer **202 Accepted** with the PENDING order: "got it, we're working on it".
 
-Why save as PENDING *before* calling inventory? Inventory reserves stock under the
-order's id, so the order must have an id first. And if something fails halfway, the
-order is still written down instead of silently lost.
+Later, and without the customer waiting, inventory picks up the event, reserves the
+books and replies with its own event; order then moves the order to CONFIRMED or
+CANCELLED (pieces 3 and 4 of step 4). The client finds out by looking at the order
+again (`GET /orders/{id}`). That's the **checkout saga** in CLAUDE.md.
 
-Why leave it PENDING when inventory doesn't answer, instead of cancelling? We don't
-know what happened: inventory may have reserved the books and only the answer got
-lost. Cancelling would then keep books locked away for an order that "failed".
-PENDING honestly says "we don't know yet". This is exactly the weakness that step 4
-fixes: with events, the answer arrives later instead of being lost.
+Why 202 and not 201? 201 means "created, here's the result". 202 means "accepted,
+not finished yet", which is the honest answer while the order is still PENDING.
 
-Both CONFIRMED and CANCELLED orders answer 201: in both cases a new order was
-created; its `status` says how it went.
+If RabbitMQ doesn't take the event, the order stays PENDING and the client gets 503
+`BROKER_UNAVAILABLE` with the order id. Nothing re-sends the event later: that order is
+stuck. Step 5's outbox pattern closes this gap (hard rule 4).
 
-The cart is NOT emptied after a confirmed order yet. Per CLAUDE.md that happens when
-cart receives the OrderConfirmed event (roadmap step 4/5).
+Until pieces 3 and 4 exist, *every* order stays PENDING: nobody is listening yet.
 
 ## Who may see which order
 
@@ -37,10 +34,10 @@ answers 404, the same as an id that doesn't exist, so ids can't be probed.
 
 import logging
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx2
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
@@ -48,8 +45,10 @@ from app import clients
 from app.config import settings
 from app.db import Engine
 from app.errors import ApiError
+from app.events import BrokerUnavailable, EventPublisher
 from app.schemas import Order, OrderItem, OrderPage
-from app.tables import CANCELLED, CONFIRMED, PENDING, order_items, orders
+from app.tables import PENDING, order_items, orders
+from shared.events import ORDER_CREATED, OrderCreatedItem, OrderCreatedPayload, new_event
 
 logger = logging.getLogger(__name__)
 
@@ -60,17 +59,43 @@ def get_http_client(request: Request) -> httpx2.AsyncClient:
     return request.app.state.http_client
 
 
+def get_publisher(request: Request) -> EventPublisher:
+    return request.app.state.publisher
+
+
 HttpClient = Annotated[httpx2.AsyncClient, Depends(get_http_client)]
+Publisher = Annotated[EventPublisher, Depends(get_publisher)]
 # The logged-in user, set by the gateway. Missing or not a UUID -> 400 VALIDATION_ERROR
 # (that only happens if someone calls order directly, bypassing the gateway).
 UserId = Annotated[UUID, Header(alias="X-User-ID")]
+CorrelationHeader = Annotated[str | None, Header(alias="X-Correlation-ID")]
+
+
+def correlation_id_from(header: str | None) -> UUID:
+    """The request's correlation ID, which every event it causes must carry (hard rule 7).
+
+    Roadmap step 6 makes the gateway always send one. Until then, use the header if
+    it's there and a valid UUID, otherwise start a new one here.
+    """
+    try:
+        return UUID(header)
+    except (TypeError, ValueError):
+        return uuid4()
 
 
 # --- placing an order ---
 
 
-@router.post("", status_code=201, response_model=Order)
-async def place_order(user_id: UserId, engine: Engine, http: HttpClient) -> Order:
+@router.post("", status_code=202, response_model=Order)
+async def place_order(
+    user_id: UserId,
+    engine: Engine,
+    http: HttpClient,
+    publisher: Publisher,
+    response: Response,
+    correlation_header: CorrelationHeader = None,
+) -> Order:
+    correlation_id = correlation_id_from(correlation_header)
     try:
         cart = await clients.get_cart(http, settings.cart_url, user_id)
     except clients.ServiceUnavailable as exc:
@@ -80,27 +105,44 @@ async def place_order(user_id: UserId, engine: Engine, http: HttpClient) -> Orde
         raise ApiError(409, "CART_EMPTY", "The cart is empty; add books before ordering")
 
     order_id = await save_pending_order(engine, user_id, cart)
-    logger.info("order created", extra={"orderId": str(order_id), "status": PENDING})
+    logger.info(
+        "order created",
+        extra={"orderId": str(order_id), "status": PENDING, "correlationId": str(correlation_id)},
+    )
 
-    reservation_items = [
-        {"bookId": item["bookId"], "quantity": item["quantity"]} for item in cart["items"]
-    ]
+    # Publish only after the order is committed: whoever reacts to the event may look
+    # for the order (or send a reply about it), so it must already exist.
+    event = new_event(
+        ORDER_CREATED,
+        order_created_payload(order_id, user_id, cart),
+        correlation_id,
+    )
     try:
-        await clients.reserve_stock(http, settings.inventory_url, order_id, reservation_items)
-    except clients.InsufficientStock:
-        await finish_order(engine, order_id, CANCELLED, cancel_reason="INSUFFICIENT_STOCK")
-    except clients.ServiceUnavailable as exc:
-        logger.error("order left pending: inventory unavailable", extra={"orderId": str(order_id)})
+        await publisher.publish(event)
+    except BrokerUnavailable as exc:
+        logger.error("order left pending: event not published", extra={"orderId": str(order_id)})
         raise ApiError(
             503,
-            "INVENTORY_UNAVAILABLE",
-            "The inventory service is unavailable; the order is still pending",
+            "BROKER_UNAVAILABLE",
+            "The order was saved but could not be passed on for processing; it stays pending",
             details=[{"orderId": str(order_id)}],
         ) from exc
-    else:
-        await finish_order(engine, order_id, CONFIRMED)
 
+    # Where the client can check on the order (it's still PENDING).
+    response.headers["Location"] = f"/orders/{order_id}"
     return await load_order(engine, order_id, user_id)
+
+
+def order_created_payload(order_id: UUID, user_id: UUID, cart: dict) -> dict:
+    """The OrderCreated payload (CLAUDE.md events table): orderId, userId, items."""
+    payload = OrderCreatedPayload(
+        order_id=order_id,
+        user_id=user_id,
+        items=[
+            OrderCreatedItem(book_id=item["bookId"], qty=item["quantity"]) for item in cart["items"]
+        ],
+    )
+    return payload.to_dict()
 
 
 async def save_pending_order(engine: AsyncEngine, user_id: UUID, cart: dict) -> UUID:
@@ -137,6 +179,9 @@ async def finish_order(
 ) -> None:
     """Move a PENDING order to CONFIRMED or CANCELLED.
 
+    Not called right now: in step 4 piece 4 it runs when inventory's reply event
+    (StockReserved / StockFailed) arrives.
+
     `WHERE status = 'PENDING'` enforces the only allowed transitions (CLAUDE.md): a
     confirmed or cancelled order never changes again.
     """
@@ -147,8 +192,8 @@ async def finish_order(
             .values(status=status, cancel_reason=cancel_reason, updated_at=func.now())
         )
     if result.rowcount != 1:
-        # Can't happen in step 3 (only this request touches the new order), but if it
-        # ever does we want to hear about it rather than silently overwrite.
+        # E.g. a reply event delivered twice: the order is already finished. We want
+        # to hear about it rather than silently overwrite.
         logger.error(
             "order was not pending, status not changed",
             extra={"orderId": str(order_id), "wantedStatus": status},

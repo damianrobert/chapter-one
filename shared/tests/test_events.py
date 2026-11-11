@@ -5,7 +5,13 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from shared.events import ORDER_CREATED, EventEnvelope, new_event
+from shared.events import (
+    ORDER_CREATED,
+    EventEnvelope,
+    OrderCreatedItem,
+    OrderCreatedPayload,
+    new_event,
+)
 
 CORRELATION_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
 
@@ -79,3 +85,50 @@ def test_events_cannot_be_changed_after_creation():
     event = new_event(ORDER_CREATED, {}, CORRELATION_ID)
     with pytest.raises(ValidationError):
         event.event_type = "Something"
+
+
+# --- payloads ---
+
+ORDER_ID = "33333333-3333-4333-8333-333333333333"
+USER_ID = "44444444-4444-4444-8444-444444444444"
+BOOK_ID = "11111111-1111-4111-8111-000000000001"
+
+
+def test_order_created_payload_as_json():
+    payload = OrderCreatedPayload(
+        order_id=uuid.UUID(ORDER_ID),
+        user_id=uuid.UUID(USER_ID),
+        items=[OrderCreatedItem(book_id=uuid.UUID(BOOK_ID), qty=2)],
+    )
+
+    assert payload.to_dict() == {
+        "orderId": ORDER_ID,
+        "userId": USER_ID,
+        "items": [{"bookId": BOOK_ID, "qty": 2}],
+    }
+
+
+def test_order_created_payload_read_back_from_an_event():
+    data = {"orderId": ORDER_ID, "userId": USER_ID, "items": [{"bookId": BOOK_ID, "qty": 2}]}
+    event = EventEnvelope.from_json(new_event(ORDER_CREATED, data, CORRELATION_ID).to_json())
+
+    payload = OrderCreatedPayload.model_validate(event.payload)
+
+    assert payload.items[0].qty == 2
+
+
+def test_payloads_ignore_fields_they_dont_know_yet():
+    # A producer adding a field must not break older consumers.
+    data = {"orderId": ORDER_ID, "userId": USER_ID, "items": [{"bookId": BOOK_ID, "qty": 1}]}
+    payload = OrderCreatedPayload.model_validate(data | {"giftWrap": True})
+    assert payload.order_id == uuid.UUID(ORDER_ID)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"items": []}, {"items": [{"bookId": BOOK_ID, "qty": 0}]}, {"orderId": "nope"}],
+)
+def test_bad_order_created_payloads_are_refused(change):
+    data = {"orderId": ORDER_ID, "userId": USER_ID, "items": [{"bookId": BOOK_ID, "qty": 1}]}
+    with pytest.raises(ValidationError):
+        OrderCreatedPayload.model_validate(data | change)

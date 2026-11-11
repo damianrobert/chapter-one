@@ -6,8 +6,8 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 ## Current status
 
 - **Roadmap step:** 4 in progress (replace order → inventory call with RabbitMQ events)
-- **Next piece:** step 4, piece 2 — order publishes `OrderCreated`; wire `shared/` into
-  order's image
+- **Next piece:** step 4, piece 3 — inventory consumes `OrderCreated`, reserves, publishes
+  `StockReserved` / `StockFailed`. Until piece 4 every new order stays `PENDING`.
 - **Last updated:** 2026-11-11
 
 ## Step 1 — Catalog service
@@ -62,11 +62,11 @@ Draft plan; adjust as we go. Outbox and Notification are step 5.
 | #  | Piece                                                                 | Status  | Commit    |
 |----|-----------------------------------------------------------------------|---------|-----------|
 | 1  | RabbitMQ in Compose (approved 2026-11-11), event envelope in `shared/` | done |           |
-| 2  | Order publishes `OrderCreated`; `POST /orders` answers 202 with a PENDING order | planned | |
+| 2  | Order publishes `OrderCreated`; `POST /orders` answers 202 with a PENDING order (HTTP call to inventory removed) | done | |
 | 3  | Inventory consumes `OrderCreated`, reserves, publishes `StockReserved` / `StockFailed` | planned | |
 | 4  | Order consumes the replies → CONFIRMED / CANCELLED, publishes `OrderConfirmed` / `OrderCancelled` | planned | |
 | 5  | Cart consumes `OrderConfirmed` and empties the cart                   | planned |           |
-| 6  | Remove the HTTP reservation call, break it again, learning guide `step-4-...md` | planned | |
+| 6  | Decide about inventory's HTTP reservation endpoint, break it again, learning guide `step-4-...md` | planned | |
 
 ## Decisions made along the way
 
@@ -234,6 +234,39 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 - `shared/` has its own tests and venv (`cd shared && pytest`). Plan for getting it into
   images: Compose's `build.additional_contexts` hands `shared/` to a service's build
   as an extra folder, so each image still builds from its own folder (piece 2).
+- `shared/` reaches order's image through Compose `build.additional_contexts`
+  (`shared: ./shared`); the Dockerfile copies only `__init__.py` and `events.py`
+  (`COPY --from=shared`). Locally, `pythonpath = [".", "../.."]` in `pyproject.toml`.
+  Building an image by hand needs `docker build --build-context shared=../../shared .`.
+- Event payloads are pydantic classes in `shared/events.py` too (`OrderCreatedPayload`),
+  so producer and consumer read one definition. Payloads **ignore** unknown fields
+  (adding a field isn't breaking); the envelope refuses them.
+- Order's publisher (`services/order/app/events.py`): aio-pika robust connection, opened
+  on first use (order starts and reports "broker unreachable" while RabbitMQ is down,
+  reconnects by itself, ~8s after a restart in our test). **Topic** exchange
+  `chapter-one.events`, durable; **routing key = event type**. Publisher confirms on,
+  persistent messages, `mandatory=True` so an event no queue wants is logged as a
+  warning ("event not delivered to any queue") instead of vanishing silently (aio-pika
+  doesn't log it by itself). 1.5s budget per publish (ADR 0002 updated).
+- **Producers declare only the exchange; each consumer declares and binds its own
+  queue** (`<consumer>.<event>`). Events published before a queue exists are lost
+  (expected until piece 3).
+- `POST /orders` → **202** + `Location`, order `PENDING`, event published after the
+  commit. Broker down → 503 `BROKER_UNAVAILABLE` with the `orderId`; the order stays
+  `PENDING` with nobody to re-send its event. Save-then-publish is the known gap that
+  step 5's outbox fixes (hard rule 4).
+- Order's HTTP call to inventory, `INVENTORY_URL` and `InsufficientStock` are gone.
+  `finish_order()` stays: piece 4 uses it for the reply events. Inventory's
+  `PUT /reservations/{orderId}` still exists (piece 3 reuses its logic).
+- Correlation ID for now: order uses `X-Correlation-ID` if it's a UUID, else makes one.
+  The gateway doesn't forward that header yet (step 6), so through the gateway it's
+  always a fresh one.
+- `/health/ready` for order checks database **and** broker (`checks.broker`).
+- RabbitMQ 4 refuses non-durable shared queues (`transient_nonexcl_queues` deprecated):
+  queues must be durable (or exclusive, as in tests).
+- Checked 2026-11-11 against Compose: 202 + PENDING through the gateway; the event caught
+  in a temporary queue had the exact CLAUDE.md envelope; RabbitMQ stopped → instant 503
+  and ready 503; started again → ready and ordering work without restarting order.
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 
@@ -249,7 +282,9 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 - Cart doesn't forward a correlation ID to catalog yet (roadmap step 6).
 - Budgets are kept in sync by hand across services (tests check that they nest). Passing
   a deadline along with each request would automate it; not needed yet.
-- Orders left `PENDING` when inventory didn't answer stay stuck forever (nothing
-  re-checks them). Step 4's events fix this; until then they can only be spotted by hand.
+- Orders left `PENDING` because the event couldn't be published stay stuck forever
+  (nothing re-sends it). Step 5's outbox fixes this.
+- Inventory's HTTP `PUT /reservations/{orderId}`: keep it (handy for manual tests) or
+  remove it once the consumer exists? Decide in piece 6.
 - Double-clicking "order" places two orders (no idempotency key on `POST /orders`).
   Consider an `Idempotency-Key` header later.

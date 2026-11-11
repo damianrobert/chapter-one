@@ -34,14 +34,15 @@ happens, but nobody gets told the result.
 |------------------------|--------|------------------------------------------------------|
 | cart → catalog         | 1.5s   | Leaf call                                            |
 | order → cart           | 1.5s   | Leaf call (reading a cart doesn't call catalog)      |
-| order → inventory      | 1.5s   | Leaf call                                            |
+| order → inventory      | 1.5s   | Leaf call (step 3 only; removed in step 4)           |
+| order → RabbitMQ       | 1.5s   | Publish + broker's confirm (step 4 on)               |
 | gateway → catalog      | 2s     | Hard rule 6's default                                |
 | gateway → cart         | 2s     | More than cart's 1.5s on catalog                     |
-| gateway → order        | **5s** | Order makes two calls (max 3s) plus DB writes        |
+| gateway → order        | **5s** | Order makes two calls (max 3s) plus DB writes. From step 4 these are cart + publishing, still max 3s |
 
 The budgets are constants next to the code that uses them:
 `services/gateway/app/routes.py` (`BUDGETS`), `services/cart/app/catalog_client.py` and
-`services/order/app/clients.py` (`BUDGET_SECONDS`). Tests check that the numbers
+`services/order/app/clients.py` and `services/order/app/events.py` (`BUDGET_SECONDS`). Tests check that the numbers
 still nest correctly.
 
 ## Consequences

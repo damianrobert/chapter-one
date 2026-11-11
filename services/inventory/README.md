@@ -28,7 +28,8 @@ RabbitMQ only (it reserves stock when it receives `OrderCreated`).
 How it stays correct under load is explained at the top of `app/reservations.py`
 (conditional `UPDATE`, one transaction, order id as primary key).
 
-The gateway doesn't route to inventory; only the order service calls it. Locally you can
+The gateway doesn't route to inventory. Since step 4 the order service no longer calls it
+either (it publishes `OrderCreated` instead; inventory consumes it from piece 3 on). Locally you can
 call port 8003 directly, e.g. to stock a book created with `POST /api/books`:
 
 ```bash

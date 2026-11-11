@@ -66,6 +66,37 @@ class EventEnvelope(BaseModel):
         return cls.model_validate_json(body)
 
 
+# --- payloads: what's inside the envelope, one class per event type ---
+#
+# Unlike the envelope, payloads *ignore* unknown fields (extra="ignore"). That lets a
+# producer add a field later without breaking consumers that don't know it yet: adding
+# is a non-breaking change. Removing or renaming a field is breaking and needs a new
+# `version` (CLAUDE.md).
+
+
+class Payload(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=to_camel, populate_by_name=True, frozen=True, extra="ignore"
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-ready dict for EventEnvelope.payload (UUIDs as strings, camelCase keys)."""
+        return self.model_dump(mode="json", by_alias=True)
+
+
+class OrderCreatedItem(Payload):
+    book_id: uuid.UUID
+    qty: int = Field(ge=1)
+
+
+class OrderCreatedPayload(Payload):
+    """OrderCreated v1: "this order needs these books". Producer: order. Consumer: inventory."""
+
+    order_id: uuid.UUID
+    user_id: uuid.UUID
+    items: list[OrderCreatedItem] = Field(min_length=1)
+
+
 def new_event(
     event_type: str,
     payload: dict[str, Any],
