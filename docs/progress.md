@@ -5,9 +5,9 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 
 ## Current status
 
-- **Roadmap step:** 2 done (API gateway + Cart service with Redis)
-- **Next piece:** step 3 — plan its pieces (Order service calling Inventory synchronously)
-- **Last updated:** 2026-11-10
+- **Roadmap step:** 3 in progress (Order service calling Inventory synchronously)
+- **Next piece:** step 3, piece 2 — inventory stock endpoints (check + atomic reserve)
+- **Last updated:** 2026-11-11
 
 ## Step 1 — Catalog service
 
@@ -36,6 +36,20 @@ Learning guide for this step: `docs/learning/step-1-catalog.md`.
 | 7  | Learning guide `docs/learning/step-2-gateway-cart.md`                 | done    |           |
 
 Learning guide for this step: `docs/learning/step-2-gateway-cart.md`.
+
+## Step 3 — Order calls Inventory synchronously
+
+On purpose a simple, fragile design: order waits for inventory's answer over HTTP.
+Step 4 replaces that call with events.
+
+| #  | Piece                                                                 | Status  | Commit    |
+|----|-----------------------------------------------------------------------|---------|-----------|
+| 1  | Inventory skeleton: own Postgres, `stock` table + seed, health, logs, Compose | done |       |
+| 2  | Inventory endpoints: check stock, reserve stock atomically (hard rule 5) | planned |        |
+| 3  | Order skeleton: own Postgres, `orders` + `order_items` tables         | planned |           |
+| 4  | `POST /orders`: read cart, copy prices, call inventory, CONFIRMED/CANCELLED; `GET /orders` | planned | |
+| 5  | Gateway forwards `/api/orders`; settle the timeout budget between services | planned |       |
+| 6  | Break it on purpose (pause inventory), learning guide `step-3-...md`  | planned |           |
 
 ## Decisions made along the way
 
@@ -121,6 +135,15 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   errors, catalog 404 → cart 404 `BOOK_NOT_FOUND`, any other non-200 or no answer →
   503 `CATALOG_UNAVAILABLE`. GET/DELETE don't call catalog, so they work while it's down.
   Redis unreachable → 503 `DATABASE_UNAVAILABLE` (same code as catalog's DB).
+- Inventory listens on 8003 with its own Postgres (`inventory-db`, `inventory_db`); order
+  will be 8004. Inventory is a copy of catalog's skeleton (same db.py, errors, logging,
+  Alembic setup, Dockerfile).
+- `stock` table: one row per book (`book_id` PK, `quantity` with a DB check `>= 0`).
+  `book_id` has no foreign key: books live in catalog's DB (hard rule 1). Seed (migration
+  `0002`) covers catalog's six demo books; Dracula has 2, Dorian Gray 0, to make "out of
+  stock" easy to test. A test compares the seed ids with catalog's.
+- Books created later via `POST /books` have no stock row, so they can't be ordered until
+  inventory gets a way to set stock (piece 2).
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 

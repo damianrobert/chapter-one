@@ -1,0 +1,6 @@
+# Development-only dependencies (tests, lint) — NOT installed in the Docker image
+pytest==9.2.0
+httpx2==2.16.0  # used by FastAPI's TestClient
+ruff==0.17.3
+# Starts a throwaway Postgres container for DB-backed tests (needs Docker running)
+testcontainers[postgres]==4.15.0

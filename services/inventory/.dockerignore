@@ -1,0 +1,11 @@
+# Keep the build context small and avoid leaking local files into the image.
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.env
+tests/
+Dockerfile
+.dockerignore
+README.md
