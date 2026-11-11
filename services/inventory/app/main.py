@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app import db
+from app import db, reservations, stock
 from app.config import settings
 from app.errors import register_error_handlers
 
@@ -25,7 +25,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Chapter One — Inventory", lifespan=lifespan)
 register_error_handlers(app)
-# The stock endpoints (check stock, reserve stock) come in the next piece.
+app.include_router(stock.router)
+app.include_router(reservations.router)
 
 
 @app.middleware("http")

@@ -1,3 +1,4 @@
+import asyncio
 import os
 from pathlib import Path
 
@@ -10,8 +11,12 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:
 
 from alembic import command  # noqa: E402  (must come after DATABASE_URL is set)
 from alembic.config import Config  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import text  # noqa: E402
+from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
 from app.config import settings  # noqa: E402
+from app.main import app  # noqa: E402
 
 SERVICE_DIR = Path(__file__).parent.parent
 
@@ -39,3 +44,34 @@ def database_url():
             command.upgrade(alembic_cfg, "head")
 
         yield url
+
+
+# The seed quantities from migration 0002, restored after every test.
+SEED_SQL = """
+    TRUNCATE reservation_items, reservations, stock;
+    INSERT INTO stock (book_id, quantity) VALUES
+        ('11111111-1111-4111-8111-000000000001', 10),
+        ('11111111-1111-4111-8111-000000000002', 10),
+        ('11111111-1111-4111-8111-000000000003', 5),
+        ('11111111-1111-4111-8111-000000000004', 5),
+        ('11111111-1111-4111-8111-000000000005', 2),
+        ('11111111-1111-4111-8111-000000000006', 0);
+"""
+
+
+async def reset_database(url: str) -> None:
+    engine = create_async_engine(url)
+    async with engine.begin() as conn:
+        # asyncpg runs one statement per execute(), so split on ";".
+        for statement in filter(str.strip, SEED_SQL.split(";")):
+            await conn.execute(text(statement))
+    await engine.dispose()
+
+
+@pytest.fixture
+def db_client(database_url, monkeypatch):
+    """A test client whose app talks to the throwaway Postgres, reset afterwards."""
+    monkeypatch.setattr(settings, "database_url", database_url)
+    with TestClient(app) as client:
+        yield client
+    asyncio.run(reset_database(database_url))

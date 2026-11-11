@@ -23,11 +23,13 @@ logger = logging.getLogger(__name__)
 class ApiError(Exception):
     """Raise this from an endpoint to return an error in our standard shape."""
 
-    def __init__(self, status_code: int, code: str, message: str):
+    def __init__(self, status_code: int, code: str, message: str, details: list | None = None):
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
+        # Optional extra info for the client, e.g. which book was out of stock.
+        self.details = details
 
 
 def error_response(
@@ -40,7 +42,7 @@ def error_response(
 
 
 async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
-    return error_response(exc.status_code, exc.code, exc.message)
+    return error_response(exc.status_code, exc.code, exc.message, exc.details)
 
 
 async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:

@@ -6,7 +6,7 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 ## Current status
 
 - **Roadmap step:** 3 in progress (Order service calling Inventory synchronously)
-- **Next piece:** step 3, piece 2 — inventory stock endpoints (check + atomic reserve)
+- **Next piece:** step 3, piece 3 — order service skeleton with its own Postgres
 - **Last updated:** 2026-11-11
 
 ## Step 1 — Catalog service
@@ -44,8 +44,8 @@ Step 4 replaces that call with events.
 
 | #  | Piece                                                                 | Status  | Commit    |
 |----|-----------------------------------------------------------------------|---------|-----------|
-| 1  | Inventory skeleton: own Postgres, `stock` table + seed, health, logs, Compose | done |       |
-| 2  | Inventory endpoints: check stock, reserve stock atomically (hard rule 5) | planned |        |
+| 1  | Inventory skeleton: own Postgres, `stock` table + seed, health, logs, Compose | done | `e4928a2` |
+| 2  | Inventory endpoints: get/set stock, reserve stock atomically (hard rule 5) | done |          |
 | 3  | Order skeleton: own Postgres, `orders` + `order_items` tables         | planned |           |
 | 4  | `POST /orders`: read cart, copy prices, call inventory, CONFIRMED/CANCELLED; `GET /orders` | planned | |
 | 5  | Gateway forwards `/api/orders`; settle the timeout budget between services | planned |       |
@@ -142,8 +142,24 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   `book_id` has no foreign key: books live in catalog's DB (hard rule 1). Seed (migration
   `0002`) covers catalog's six demo books; Dracula has 2, Dorian Gray 0, to make "out of
   stock" easy to test. A test compares the seed ids with catalog's.
-- Books created later via `POST /books` have no stock row, so they can't be ordered until
-  inventory gets a way to set stock (piece 2).
+- Books created later via `POST /books` have no stock row; stock them with
+  `PUT /stock/{bookId}` on port 8003 (sets the count, doesn't add to it). The gateway
+  doesn't route to inventory, so this is local-only for now.
+- Reserving is `PUT /reservations/{orderId}` (`app/reservations.py`): one transaction,
+  books updated in sorted id order (avoids deadlocks), each with
+  `UPDATE ... WHERE quantity >= :n` and a row-count check (hard rule 5). All or nothing.
+- Reservations are **idempotent by order id**: the order id is the primary key of a
+  `reservations` table, claimed first with `INSERT ... ON CONFLICT DO NOTHING`. A repeat
+  with the same items → 200 and nothing changes; different items → 409
+  `RESERVATION_CONFLICT`. This lets order safely retry the call (hard rule 6) and is a
+  first taste of step 5's idempotent consumers.
+- Short stock and "no stock record" both answer 409 `INSUFFICIENT_STOCK` (with the book
+  in `details`). A failed attempt stores nothing, so the same order id can retry later.
+- No "release reservation" yet: in step 3 a failed order reserves nothing. Needed once
+  orders can be cancelled after reserving.
+- Inventory's `ApiError` accepts optional `details` (catalog's and cart's don't need it).
+- A test fires 8 simultaneous reservations for Dracula (2 in stock) and checks exactly 2
+  succeed.
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 

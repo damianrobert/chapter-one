@@ -7,7 +7,9 @@ even while the database is still down and report that via /health/ready.
 """
 
 import asyncio
+from typing import Annotated
 
+from fastapi import Depends, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -30,3 +32,12 @@ async def ping_database(engine: AsyncEngine) -> None:
     async with asyncio.timeout(DB_TIMEOUT_SECONDS):
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
+
+
+def get_engine(request: Request) -> AsyncEngine:
+    # A FastAPI "dependency": endpoints declare a parameter of type `Engine` and
+    # FastAPI calls this to supply the engine created at startup (main.py lifespan).
+    return request.app.state.engine
+
+
+Engine = Annotated[AsyncEngine, Depends(get_engine)]
