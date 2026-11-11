@@ -1,6 +1,7 @@
 """How order reads answers from cart and inventory (no database needed)."""
 
 import asyncio
+import time
 import uuid
 
 import httpx2
@@ -72,3 +73,24 @@ def test_gives_up_after_max_attempts_without_an_answer():
     with pytest.raises(clients.ServiceUnavailable):
         reserve(client)
     assert len(attempts) == clients.MAX_ATTEMPTS
+
+
+def test_gives_up_when_a_service_hangs_longer_than_the_budget(monkeypatch):
+    monkeypatch.setattr(clients, "BUDGET_SECONDS", 0.2)
+
+    async def answer_too_late(request):
+        await asyncio.sleep(5)
+        return httpx2.Response(201, json={})
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(answer_too_late))
+
+    start = time.perf_counter()
+    with pytest.raises(clients.ServiceUnavailable):
+        reserve(client)
+    assert time.perf_counter() - start < 1
+
+
+def test_both_calls_together_fit_inside_the_gateways_budget_for_order():
+    # The gateway waits 5s for order (services/gateway/app/routes.py, BUDGETS).
+    # Placing an order calls cart, then inventory, then writes to the database.
+    assert 2 * clients.BUDGET_SECONDS < 5.0 - 1.0  # leave 1s for the database

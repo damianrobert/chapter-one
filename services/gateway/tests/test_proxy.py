@@ -6,10 +6,13 @@ function we write, which plays the part of catalog or cart. That way we can make
 them answer anything, or fail like a crashed service would, without any network.
 """
 
+import asyncio
+import time
+
 import httpx2
 import pytest
 
-from app import proxy
+from app import proxy, routes
 
 
 @pytest.fixture(autouse=True)
@@ -172,7 +175,53 @@ def test_503_names_the_cart_service_when_it_is_down(fake_service, auth_headers):
 
 
 def test_real_client_has_a_timeout():
-    # Hard rule 6: no call may wait forever.
+    # Hard rule 6: no call may wait forever, even one made without a budget.
     client = proxy.create_client()
-    assert client.timeout.read == proxy.TIMEOUT_SECONDS
-    assert client.timeout.connect == proxy.TIMEOUT_SECONDS
+    assert client.timeout.read == proxy.DEFAULT_BUDGET_SECONDS
+    assert client.timeout.connect == proxy.DEFAULT_BUDGET_SECONDS
+
+
+# --- time budgets ---
+
+
+def hang(request):
+    """A service that accepts the call but never answers within the test's budget."""
+
+    async def answer_too_late():
+        await asyncio.sleep(5)
+        return httpx2.Response(200, json={})
+
+    return answer_too_late()
+
+
+def test_a_hanging_service_gets_503_once_the_budget_is_used_up(fake_service, monkeypatch):
+    monkeypatch.setitem(routes.BUDGETS, "catalog", 0.2)
+    client, calls, set_handler = fake_service
+    set_handler(hang)
+
+    start = time.perf_counter()
+    response = client.get("/api/books")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
+    assert time.perf_counter() - start < 1  # the budget, not the 5s the service wanted
+    # A hang uses up the budget on the first attempt; it isn't waited for again.
+    assert len(calls) == 1
+
+
+def test_each_service_gets_its_own_budget(fake_service, auth_headers):
+    client, calls, _ = fake_service
+
+    client.get("/api/books")
+    client.get("/api/orders", headers=auth_headers(USER_ID))
+
+    catalog_call, order_call = calls
+    assert catalog_call.extensions["timeout"]["read"] == routes.BUDGETS["catalog"]
+    assert order_call.extensions["timeout"]["read"] == routes.BUDGETS["order"]
+
+
+def test_callers_wait_longer_than_the_services_they_call():
+    # The budget rule from docs/decisions/0002-timeout-budgets.md, as numbers:
+    # cart may spend 1.5s on catalog; order may spend 1.5s on cart + 1.5s on inventory.
+    assert routes.BUDGETS["cart"] > 1.5
+    assert routes.BUDGETS["order"] > 1.5 + 1.5

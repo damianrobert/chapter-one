@@ -8,9 +8,12 @@ over their public HTTP APIs, like any other client would:
 
 Hard rule 6 applies to both, the same way as in the gateway and the cart:
 
-- **2s timeout** on every attempt, so a hung service can't make order hang too.
+- **A 1.5s budget for each call**, retries and pauses included, so a hung service
+  can't make order hang too. Placing an order makes two calls (cart, then
+  inventory): at most 3s, well inside the 5s the gateway waits for order. See
+  docs/decisions/0002-timeout-budgets.md.
 - **Retry with backoff** (3 attempts, pauses 0.2s then 0.4s), but only when there was
-  no answer at all (connection refused, timeout).
+  no answer at all (connection refused, timeout) and budget is left.
 
 Retrying is only safe because both calls are safe to repeat:
 
@@ -33,7 +36,7 @@ import httpx2
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT_SECONDS = 2.0
+BUDGET_SECONDS = 1.5  # per call, all attempts included
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = 0.2  # pause before retry 1; doubles for each further retry
 
@@ -56,26 +59,38 @@ class InsufficientStock(Exception):
 
 def create_client() -> httpx2.AsyncClient:
     """One shared HTTP client for the whole service (it reuses connections)."""
-    return httpx2.AsyncClient(timeout=TIMEOUT_SECONDS)
+    return httpx2.AsyncClient(timeout=BUDGET_SECONDS)
 
 
 async def _send(
     client: httpx2.AsyncClient, service: str, method: str, url: str, **kwargs
 ) -> httpx2.Response:
-    """Send a request, retrying only when no answer came back at all.
+    """Send a request within BUDGET_SECONDS, retrying only when no answer came back.
 
     Callers must only use this for requests that are safe to repeat (see above).
     """
+    try:
+        # A stopwatch around all attempts: when the budget runs out it interrupts
+        # whatever is running (an attempt or a pause) with TimeoutError.
+        async with asyncio.timeout(BUDGET_SECONDS):
+            return await _send_with_retries(client, service, method, url, **kwargs)
+    except (httpx2.TransportError, TimeoutError) as exc:
+        logger.error(
+            "service unavailable, giving up",
+            extra={"upstream": service, "error": repr(exc)},
+        )
+        raise ServiceUnavailable(service, f"{service} did not answer") from exc
+
+
+async def _send_with_retries(
+    client: httpx2.AsyncClient, service: str, method: str, url: str, **kwargs
+) -> httpx2.Response:
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             return await client.request(method, url, **kwargs)
         except httpx2.TransportError as exc:
             if attempt == MAX_ATTEMPTS:
-                logger.error(
-                    "service unavailable, giving up",
-                    extra={"upstream": service, "error": repr(exc)},
-                )
-                raise ServiceUnavailable(service, f"{service} did not answer") from exc
+                raise
             logger.warning(
                 "call failed, retrying",
                 extra={"upstream": service, "attempt": attempt, "error": repr(exc)},

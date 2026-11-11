@@ -6,6 +6,7 @@ gateway's tests/test_proxy.py).
 """
 
 import asyncio
+import time
 from uuid import UUID
 
 import httpx2
@@ -94,5 +95,23 @@ def test_catalog_server_error_counts_as_unavailable_and_is_not_retried():
 def test_real_client_has_a_timeout():
     # Hard rule 6: no call may wait forever.
     client = catalog_client.create_client()
-    assert client.timeout.connect == catalog_client.TIMEOUT_SECONDS
-    assert client.timeout.read == catalog_client.TIMEOUT_SECONDS
+    assert client.timeout.connect == catalog_client.BUDGET_SECONDS
+    assert client.timeout.read == catalog_client.BUDGET_SECONDS
+
+
+def test_gives_up_when_catalog_hangs_longer_than_the_budget(monkeypatch):
+    monkeypatch.setattr(catalog_client, "BUDGET_SECONDS", 0.2)
+
+    async def answer_too_late(request):
+        await asyncio.sleep(5)
+        return httpx2.Response(200, json={})
+
+    start = time.perf_counter()
+    with pytest.raises(catalog_client.CatalogUnavailable):
+        get_book_with(answer_too_late)
+    assert time.perf_counter() - start < 1
+
+
+def test_budget_fits_inside_the_gateways_budget_for_cart():
+    # The gateway waits 2s for cart (services/gateway/app/routes.py, BUDGETS).
+    assert catalog_client.BUDGET_SECONDS < 2.0

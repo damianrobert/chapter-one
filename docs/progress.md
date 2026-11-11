@@ -6,7 +6,7 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 ## Current status
 
 - **Roadmap step:** 3 in progress (Order service calling Inventory synchronously)
-- **Next piece:** step 3, piece 5 — gateway forwards `/api/orders`; settle the timeout budget
+- **Next piece:** step 3, piece 6 — break it on purpose, learning guide `step-3-...md`
 - **Last updated:** 2026-11-11
 
 ## Step 1 — Catalog service
@@ -47,8 +47,8 @@ Step 4 replaces that call with events.
 | 1  | Inventory skeleton: own Postgres, `stock` table + seed, health, logs, Compose | done | `e4928a2` |
 | 2  | Inventory endpoints: get/set stock, reserve stock atomically (hard rule 5) | done | `60f1363` |
 | 3  | Order skeleton: own Postgres, `orders` + `order_items` tables         | done    | `c6c4fa1` |
-| 4  | `POST /orders`: read cart, copy prices, call inventory, CONFIRMED/CANCELLED; `GET /orders` | done | |
-| 5  | Gateway forwards `/api/orders`; settle the timeout budget between services | planned |       |
+| 4  | `POST /orders`: read cart, copy prices, call inventory, CONFIRMED/CANCELLED; `GET /orders` | done | `235f59f` |
+| 5  | Gateway forwards `/api/orders`; settle the timeout budget between services | done    |           |
 | 6  | Break it on purpose (pause inventory), learning guide `step-3-...md`  | planned |           |
 
 ## Decisions made along the way
@@ -56,6 +56,7 @@ Step 4 replaces that call with events.
 Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 
 - Python/FastAPI stack — see `docs/decisions/0001-python-fastapi-stack.md`.
+- Time budgets between services — see `docs/decisions/0002-timeout-budgets.md`.
 - `pip` + `requirements.txt` per service (no uv/poetry); runtime and dev deps split.
 - Test client uses `httpx2` (FastAPI's TestClient warns with plain `httpx`).
 - Health endpoints return `{"status", "checks"}`, not the API error shape — they're
@@ -188,6 +189,15 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 - `GET /orders` loads the items of a whole page in one query (not one query per order).
 - The cart is **not** emptied after a confirmed order; per CLAUDE.md that's cart reacting
   to `OrderConfirmed` (step 4/5). Until then, ordering twice orders the same books twice.
+- Gateway routes `/api/orders*` → order (login required, `X-User-ID` forwarded). No
+  ownership check at the gateway: order paths have no user id in them, so order filters
+  by `X-User-ID` itself.
+- **Time budgets (ADR 0002):** a timeout now covers the *whole* call, retries included
+  (`asyncio.timeout` around the retry loop), and budgets shrink deeper in: cart → catalog,
+  order → cart and order → inventory 1.5s each; gateway → catalog/cart 2s, gateway →
+  order 5s. Checked 2026-11-11 with `docker compose pause`: frozen inventory → order's own
+  503 `INVENTORY_UNAVAILABLE` after 1.5s; frozen catalog → cart's 503
+  `CATALOG_UNAVAILABLE` after 1.5s (before: the gateway's generic 503 at 2s).
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 
@@ -201,12 +211,9 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 - Compose publishes catalog's and cart's ports on the host, which skips the gateway's
   login checks. Fine locally; in Kubernetes (step 7) only the gateway should be exposed.
 - Cart doesn't forward a correlation ID to catalog yet (roadmap step 6).
-- Timeouts don't nest: the gateway waits 2s for cart, but cart can spend about 6.6s on a
-  frozen catalog (3 tries of 2s plus pauses). Tested 2026-11-10 with `docker compose pause
-  catalog`: the client got 503 "cart service is unavailable" after 2s, and cart saved the
-  item anyway once catalog resumed. Harmless for cart's repeatable PUT. Decide before order
-  (step 3) adds longer call chains: e.g. cart's total time on catalog must fit under the
-  gateway's timeout. **Now worse:** `POST /orders` calls cart (up to ~6.6s) then inventory
-  (up to ~6.6s) while the gateway would wait 2s. Settle in step 3 piece 5.
+- Budgets are kept in sync by hand across services (tests check that they nest). Passing
+  a deadline along with each request would automate it; not needed yet.
+- Orders left `PENDING` when inventory didn't answer stay stuck forever (nothing
+  re-checks them). Step 4's events fix this; until then they can only be spotted by hand.
 - Double-clicking "order" places two orders (no idempotency key on `POST /orders`).
   Consider an `Idempotency-Key` header later.

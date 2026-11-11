@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 # Tests never really call the services: they swap the HTTP client for a fake.
 os.environ.setdefault("CATALOG_URL", "http://catalog.test:8001")
 os.environ.setdefault("CART_URL", "http://cart.test:8002")
+os.environ.setdefault("ORDER_URL", "http://order.test:8004")
 os.environ.setdefault("JWT_SECRET", "test-secret-that-is-at-least-32-characters")
 
 

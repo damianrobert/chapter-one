@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     catalog_url: str
     # env: CART_URL, e.g. http://cart:8002. Required for the same reason.
     cart_url: str
+    # env: ORDER_URL, e.g. http://order:8004. Required for the same reason.
+    order_url: str
 
     # env: JWT_SECRET, the key that signs login tokens. No default, and it must be long
     # enough that nobody can guess it.

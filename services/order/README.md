@@ -31,8 +31,9 @@ What `POST /orders` does (step 3, synchronous):
    - inventory down → order stays `PENDING`, 503 `INVENTORY_UNAVAILABLE` with the
      `orderId` in `details`
 
-Calls to cart and inventory: 2s timeout, up to 3 attempts when there's no answer
-(`app/clients.py`). The cart is not emptied yet (that comes with events in step 4/5).
+Calls to cart and inventory: 1.5s budget per call (retries included), up to 3 attempts
+when there's no answer (`app/clients.py`; why: `docs/decisions/0002-timeout-budgets.md`).
+The cart is not emptied yet (that comes with events in step 4/5).
 
 ```bash
 curl -X POST localhost:8004/orders -H "X-User-ID: <uuid>"

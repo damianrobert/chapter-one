@@ -51,8 +51,9 @@ title, author, priceMinor, currency, quantity). Every change resets the key's TT
 | `REDIS_URL`   | (required) | e.g. `redis://cart-redis:6379/0`              |
 | `CATALOG_URL` | (required) | e.g. `http://catalog:8001`                    |
 
-Redis calls time out after 2s. Calls to catalog time out after 2s and are tried up to
-3 times on network errors (pauses 0.2s, 0.4s) — see `app/catalog_client.py`.
+Redis calls time out after 2s. Calls to catalog have a 1.5s budget for the whole
+call, inside which they're tried up to 3 times on network errors (pauses 0.2s, 0.4s) —
+see `app/catalog_client.py` and `docs/decisions/0002-timeout-budgets.md`.
 
 ## Inspect the data
 

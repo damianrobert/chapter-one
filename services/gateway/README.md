@@ -12,6 +12,7 @@ it also adds a correlation ID. It has no database.
 | GET    | `/health/ready` | Always ready once running (doesn't check other services — see `app/main.py`) |
 | any    | `/api/books`, `/api/books/...` | Forwarded to catalog as `/books...` (see catalog's README). Reading is public; other methods need a login |
 | any    | `/api/carts/{userId}...` | Forwarded to cart as `/carts...` (see cart's README). Needs a login, and only your own cart |
+| any    | `/api/orders`, `/api/orders/...` | Forwarded to order as `/orders...` (see order's README). Needs a login; order only shows your own orders |
 
 The routing table is `app/routes.py`.
 
@@ -31,8 +32,10 @@ docker compose exec gateway python -m app.dev_token 33333333-3333-4333-8333-0000
 ```
 
 How forwarding works (`app/proxy.py`):
-- Every call to a service has a **2s timeout**.
-- `GET`/`HEAD`/`OPTIONS` are retried up to 3 attempts on network errors (pauses 0.2s, 0.4s).
+- Every call has a **time budget** covering all attempts: catalog 2s, cart 2s, order 5s
+  (`BUDGETS` in `app/routes.py`; why: `docs/decisions/0002-timeout-budgets.md`).
+- `GET`/`HEAD`/`OPTIONS` are retried up to 3 attempts on network errors while budget is
+  left (pauses 0.2s, 0.4s).
   `POST`/`PUT`/`PATCH`/`DELETE` are tried once (repeating could e.g. create a book twice).
 - If the service can't be reached: 503 `SERVICE_UNAVAILABLE`.
 - If the service answers (even 404 or 400), its answer is passed on unchanged.
@@ -49,6 +52,7 @@ for unknown paths.
 | `LOG_LEVEL`   | `INFO`     | Log level                                 |
 | `CATALOG_URL` | (required) | Catalog's address, e.g. `http://catalog:8001` |
 | `CART_URL`    | (required) | Cart's address, e.g. `http://cart:8002`   |
+| `ORDER_URL`   | (required) | Order's address, e.g. `http://order:8004` |
 | `JWT_SECRET`  | (required) | Signs login tokens, at least 32 characters |
 
 ## Logs

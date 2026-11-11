@@ -138,3 +138,38 @@ def test_client_cannot_pretend_to_be_someone_else_with_a_header(fake_service, au
 
     assert calls[0].headers["x-user-id"] == ME
     assert "x-user-id" not in calls[1].headers
+
+
+# --- orders ---
+
+
+def test_orders_need_a_login(fake_service):
+    client, calls, _ = fake_service
+
+    response = client.get("/api/orders")
+
+    assert response.status_code == 401
+    assert calls == []
+
+
+def test_orders_are_forwarded_with_the_user(fake_service, auth_headers):
+    client, calls, _ = fake_service
+
+    response = client.post("/api/orders", headers=auth_headers(ME))
+
+    assert response.status_code == 200
+    [sent] = calls
+    assert sent.method == "POST"
+    assert str(sent.url) == "http://order.test:8004/orders"
+    assert sent.headers["X-User-ID"] == ME
+
+
+def test_one_order_is_forwarded_to_the_order_service(fake_service, auth_headers):
+    client, calls, _ = fake_service
+    order_id = "44444444-4444-4444-8444-000000000001"
+
+    client.get(f"/api/orders/{order_id}", headers=auth_headers(ME))
+
+    [sent] = calls
+    assert str(sent.url) == f"http://order.test:8004/orders/{order_id}"
+    assert sent.headers["X-User-ID"] == ME

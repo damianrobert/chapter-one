@@ -4,6 +4,8 @@
     /api/books/<...>  -> catalog  /books/<...>
     /api/carts/<id>   -> cart     /carts/<id>   login needed, and only your own cart
     /api/carts/<...>  -> cart     /carts/<...>
+    /api/orders       -> order    /orders       login needed; order only shows your own
+    /api/orders/<...> -> order    /orders/<...>
 
 The gateway strips the /api prefix (CLAUDE.md, API conventions). It doesn't need to
 know each service's individual endpoints. Anything under /api/books goes to catalog,
@@ -21,6 +23,13 @@ from app.proxy import SAFE_METHODS, forward
 router = APIRouter()
 
 ALL_METHODS = ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]
+
+# How long the gateway waits for each service, retries included (hard rule 6).
+# Rule: a caller waits longer than everything the service behind it may do. Cart
+# spends at most 1.5s asking catalog, so 2s is enough for cart. Placing an order
+# asks cart (max 1.5s), then inventory (max 1.5s), plus database writes, so order
+# gets 5s. See docs/decisions/0002-timeout-budgets.md.
+BUDGETS = {"catalog": 2.0, "cart": 2.0, "order": 5.0}
 
 
 def current_user_id(request: Request) -> str | None:
@@ -60,7 +69,13 @@ async def books(request: Request) -> Response:
 
     path = request.url.path.removeprefix("/api")
     return await forward(
-        request, request.app.state.http_client, "catalog", settings.catalog_url, path, user_id
+        request,
+        request.app.state.http_client,
+        "catalog",
+        settings.catalog_url,
+        path,
+        user_id,
+        budget_seconds=BUDGETS["catalog"],
     )
 
 
@@ -76,5 +91,33 @@ async def carts(request: Request) -> Response:
         return error_response(403, "FORBIDDEN", "You can only access your own cart")
 
     return await forward(
-        request, request.app.state.http_client, "cart", settings.cart_url, path, user_id
+        request,
+        request.app.state.http_client,
+        "cart",
+        settings.cart_url,
+        path,
+        user_id,
+        budget_seconds=BUDGETS["cart"],
+    )
+
+
+@router.api_route("/api/orders", methods=ALL_METHODS)
+@router.api_route("/api/orders/{rest:path}", methods=ALL_METHODS)
+async def orders(request: Request) -> Response:
+    # Login needed for everything. Unlike carts, order paths don't contain the user's
+    # id (/orders/<orderId>), so the gateway can't check ownership from the path.
+    # Order does it itself: it only ever returns orders of the X-User-ID we send.
+    user_id = current_user_id(request)
+    if user_id is None:
+        return unauthorized()
+
+    path = request.url.path.removeprefix("/api")
+    return await forward(
+        request,
+        request.app.state.http_client,
+        "order",
+        settings.order_url,
+        path,
+        user_id,
+        budget_seconds=BUDGETS["order"],
     )
