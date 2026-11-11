@@ -6,7 +6,7 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 ## Current status
 
 - **Roadmap step:** 3 in progress (Order service calling Inventory synchronously)
-- **Next piece:** step 3, piece 4 — `POST /orders` (read cart, copy prices, reserve via inventory)
+- **Next piece:** step 3, piece 5 — gateway forwards `/api/orders`; settle the timeout budget
 - **Last updated:** 2026-11-11
 
 ## Step 1 — Catalog service
@@ -46,8 +46,8 @@ Step 4 replaces that call with events.
 |----|-----------------------------------------------------------------------|---------|-----------|
 | 1  | Inventory skeleton: own Postgres, `stock` table + seed, health, logs, Compose | done | `e4928a2` |
 | 2  | Inventory endpoints: get/set stock, reserve stock atomically (hard rule 5) | done | `60f1363` |
-| 3  | Order skeleton: own Postgres, `orders` + `order_items` tables         | done    |           |
-| 4  | `POST /orders`: read cart, copy prices, call inventory, CONFIRMED/CANCELLED; `GET /orders` | planned | |
+| 3  | Order skeleton: own Postgres, `orders` + `order_items` tables         | done    | `c6c4fa1` |
+| 4  | `POST /orders`: read cart, copy prices, call inventory, CONFIRMED/CANCELLED; `GET /orders` | done | |
 | 5  | Gateway forwards `/api/orders`; settle the timeout budget between services | planned |       |
 | 6  | Break it on purpose (pause inventory), learning guide `step-3-...md`  | planned |           |
 
@@ -169,6 +169,25 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
 - `order_items`: copies `title`, `author`, `unit_price_minor` at checkout (hard rule 2);
   `book_id` is kept for reference but never used to re-read catalog for an old order.
   Primary key `(order_id, book_id)`: one line per book, as in the cart.
+- `POST /orders` (`services/order/app/orders.py`) takes no body: it orders whatever is in
+  the cart. Order saves `PENDING` first (inventory needs the order id), then calls
+  `PUT /reservations/{orderId}`. Reserved → `CONFIRMED`; `INSUFFICIENT_STOCK` →
+  `CANCELLED` with that reason; both answer 201 (an order was created either way).
+- Inventory unreachable → the order **stays `PENDING`** and the client gets 503
+  `INVENTORY_UNAVAILABLE` with the `orderId`. Not cancelled, because inventory may have
+  reserved the books and only the answer got lost. Nothing retries it later: such orders
+  stay stuck. That's the step-3 weakness piece 6 shows off and step 4 fixes.
+- Order works out `total_minor` itself from the copied lines instead of using the cart's
+  total. Status changes use `UPDATE ... WHERE status = 'PENDING'`, so a finished order
+  never changes again.
+- Order → cart/inventory calls (`app/clients.py`): 2s timeout, 3 attempts on no answer.
+  Retrying the inventory PUT is safe because inventory is idempotent by order id. Cart
+  down → 503 `CART_UNAVAILABLE`; empty cart → 409 `CART_EMPTY` (no order saved).
+- Order trusts `X-User-ID`: lists and lookups only show the caller's orders; another
+  user's order id answers 404 `ORDER_NOT_FOUND` (same as unknown, so ids can't be probed).
+- `GET /orders` loads the items of a whole page in one query (not one query per order).
+- The cart is **not** emptied after a confirmed order; per CLAUDE.md that's cart reacting
+  to `OrderConfirmed` (step 4/5). Until then, ordering twice orders the same books twice.
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 
@@ -187,4 +206,7 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   catalog`: the client got 503 "cart service is unavailable" after 2s, and cart saved the
   item anyway once catalog resumed. Harmless for cart's repeatable PUT. Decide before order
   (step 3) adds longer call chains: e.g. cart's total time on catalog must fit under the
-  gateway's timeout.
+  gateway's timeout. **Now worse:** `POST /orders` calls cart (up to ~6.6s) then inventory
+  (up to ~6.6s) while the gateway would wait 2s. Settle in step 3 piece 5.
+- Double-clicking "order" places two orders (no idempotency key on `POST /orders`).
+  Consider an `Idempotency-Key` header later.

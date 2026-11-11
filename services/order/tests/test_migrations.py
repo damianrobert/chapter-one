@@ -1,7 +1,7 @@
 """The real migrations run on a real Postgres (see the `database_url` fixture).
 
-The order endpoints come in the next piece; until then these tests check that the
-tables exist and that the database itself refuses orders that break the rules.
+These tests check that the tables exist and that the database itself refuses orders
+that break the rules.
 """
 
 import asyncio

@@ -9,13 +9,34 @@ From step 4 on that becomes events via RabbitMQ (the checkout saga in `CLAUDE.md
 
 ## Endpoints
 
-| Method | Path            | Description                               |
-|--------|-----------------|-------------------------------------------|
-| GET    | `/health/live`  | Process is up (no dependency checks)      |
-| GET    | `/health/ready` | Database reachable (200), otherwise 503   |
+All `/orders` endpoints need the `X-User-ID` header (set by the gateway from the login
+token; hard rule 8). Missing or not a UUID → 400 `VALIDATION_ERROR`. You only ever see
+your own orders.
 
-The orders endpoints (`POST /orders`, `GET /orders`, `GET /orders/{id}`) come in the
-next piece.
+| Method | Path            | Description                                                |
+|--------|-----------------|------------------------------------------------------------|
+| POST   | `/orders`       | Place an order from your cart (no body). 201 + the order   |
+| GET    | `/orders`       | Your orders, newest first. `limit` (1–100, default 20), `offset` |
+| GET    | `/orders/{id}`  | One of your orders; someone else's or unknown → 404 `ORDER_NOT_FOUND` |
+| GET    | `/health/live`  | Process is up (no dependency checks)                       |
+| GET    | `/health/ready` | Database reachable (200), otherwise 503                    |
+
+What `POST /orders` does (step 3, synchronous):
+
+1. `GET /carts/{userId}` on cart. Cart down → 503 `CART_UNAVAILABLE`; empty → 409 `CART_EMPTY`.
+2. Saves the order as `PENDING`, copying title, author and price from the cart.
+3. `PUT /reservations/{orderId}` on inventory, then:
+   - reserved → `CONFIRMED` (201)
+   - not enough stock → `CANCELLED`, `cancelReason: "INSUFFICIENT_STOCK"` (201)
+   - inventory down → order stays `PENDING`, 503 `INVENTORY_UNAVAILABLE` with the
+     `orderId` in `details`
+
+Calls to cart and inventory: 2s timeout, up to 3 attempts when there's no answer
+(`app/clients.py`). The cart is not emptied yet (that comes with events in step 4/5).
+
+```bash
+curl -X POST localhost:8004/orders -H "X-User-ID: <uuid>"
+```
 
 ## Data
 
@@ -36,6 +57,8 @@ docker compose exec order-db psql -U order -d order_db -c 'select * from orders'
 | `PORT`         | `8004`     | HTTP port                                                |
 | `LOG_LEVEL`    | `INFO`     | Log level (`DEBUG` also shows health-check requests)     |
 | `DATABASE_URL` | (required) | `postgresql+asyncpg://user:pass@host:5432/order_db`      |
+| `CART_URL`     | (required) | Cart service, e.g. `http://cart:8002`                    |
+| `INVENTORY_URL`| (required) | Inventory service, e.g. `http://inventory:8003`          |
 
 ## Run locally
 

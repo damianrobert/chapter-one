@@ -156,8 +156,8 @@ services:
       timeout: 3s
       retries: 10
 
-  # Orders and their status. In the next piece it gets the cart's and inventory's
-  # addresses so it can place orders.
+  # Orders and their status. At checkout it reads the cart and (step 3) asks inventory
+  # over HTTP to reserve the books.
   order:
     build: ./services/order
     image: chapter-one/order
@@ -165,11 +165,19 @@ services:
       PORT: 8004
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: postgresql+asyncpg://${ORDER_DB_USER:-order}:${ORDER_DB_PASSWORD:-order}@order-db:5432/${ORDER_DB_NAME:-order_db}
+      CART_URL: http://cart:8002
+      INVENTORY_URL: http://inventory:8003
     ports:
       - "${ORDER_PORT:-8004}:8004"
+    # Cart and inventory: only "started", not "healthy" — order must cope with them
+    # being down anyway (it answers 503).
     depends_on:
       order-db:
         condition: service_healthy
+      cart:
+        condition: service_started
+      inventory:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health/live', timeout=2)"]
       interval: 10s

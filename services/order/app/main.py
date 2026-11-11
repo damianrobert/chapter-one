@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app import db
+from app import clients, db, orders
 from app.config import settings
 from app.errors import register_error_handlers
 
@@ -17,15 +17,18 @@ request_logger = logging.getLogger("app.requests")
 async def lifespan(app: FastAPI):
     # Startup: runs once before the first request is accepted.
     app.state.engine = db.create_engine(settings.database_url)
+    # One HTTP client for calls to cart and inventory; it keeps connections open.
+    app.state.http_client = clients.create_client()
     yield
     # Shutdown: runs after uvicorn has stopped accepting requests and in-flight
-    # requests finished (e.g. on SIGTERM). Close pooled DB connections cleanly.
+    # requests finished (e.g. on SIGTERM). Close connections cleanly.
+    await app.state.http_client.aclose()
     await app.state.engine.dispose()
 
 
 app = FastAPI(title="Chapter One — Order", lifespan=lifespan)
 register_error_handlers(app)
-# The orders endpoints (place an order, look orders up) come in the next piece.
+app.include_router(orders.router)
 
 
 @app.middleware("http")

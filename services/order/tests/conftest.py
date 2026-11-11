@@ -1,3 +1,4 @@
+import asyncio
 import os
 from pathlib import Path
 
@@ -7,9 +8,15 @@ import pytest
 # Tests that don't use the `database_url` fixture never connect to it: the engine
 # connects lazily, and the health tests fake the DB ping.
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+# Cart and inventory are faked in the tests (httpx2 MockTransport); these URLs are
+# never really called.
+os.environ.setdefault("CART_URL", "http://cart.test")
+os.environ.setdefault("INVENTORY_URL", "http://inventory.test")
 
 from alembic import command  # noqa: E402  (must come after DATABASE_URL is set)
 from alembic.config import Config  # noqa: E402
+from sqlalchemy import text  # noqa: E402
+from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
 from app.config import settings  # noqa: E402
 
@@ -39,3 +46,17 @@ def database_url():
             command.upgrade(alembic_cfg, "head")
 
         yield url
+
+
+async def _empty_tables(url: str) -> None:
+    engine = create_async_engine(url)
+    async with engine.begin() as conn:
+        await conn.execute(text("TRUNCATE order_items, orders"))
+    await engine.dispose()
+
+
+@pytest.fixture
+def empty_database(database_url):
+    """The throwaway Postgres's URL; its tables are emptied after the test."""
+    yield database_url
+    asyncio.run(_empty_tables(database_url))

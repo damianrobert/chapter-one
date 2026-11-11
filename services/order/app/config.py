@@ -19,5 +19,11 @@ class Settings(BaseSettings):
     # point at some guessed host.
     database_url: str
 
+    # env: CART_URL, e.g. http://cart:8002 — at checkout, order reads the user's cart.
+    cart_url: str
+    # env: INVENTORY_URL, e.g. http://inventory:8003 — order asks inventory to reserve
+    # stock (step 3 only: from step 4 on this becomes an event instead).
+    inventory_url: str
+
 
 settings = Settings()
