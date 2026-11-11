@@ -203,9 +203,36 @@ services:
       timeout: 3s
       retries: 10
 
+  # The message broker (roadmap step 4): services drop events here and others pick them
+  # up later, so the sender doesn't wait for the receiver to be up. Unlike the databases
+  # it is shared on purpose — it's the "post office" between services, not anyone's data.
+  # The "-management" image adds a web dashboard: http://localhost:15672 (log in with the
+  # user/password below) to watch exchanges, queues and messages.
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    # RabbitMQ stores its data in a folder named after the host name; a fixed name keeps
+    # it the same across restarts, so queued messages in the volume are found again.
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-chapter-one}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-chapter-one}
+    ports:
+      # Only the dashboard is published. Services reach the broker itself (port 5672)
+      # inside Compose's network as rabbitmq:5672.
+      - "${RABBITMQ_DASHBOARD_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
 volumes:
   # Named volumes: data survives `docker compose down`; `down -v` deletes it.
   catalog-db-data:
   cart-redis-data:
   inventory-db-data:
   order-db-data:
+  rabbitmq-data:

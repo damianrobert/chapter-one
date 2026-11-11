@@ -1,0 +1,16 @@
+# Tool configuration only. Run tests from inside shared/ (see README.md).
+
+[tool.pytest.ini_options]
+# The repo root, so tests can `import shared.events` the same way services will.
+pythonpath = [".."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["shared"]

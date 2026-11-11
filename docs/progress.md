@@ -5,9 +5,9 @@ Roadmap steps are defined in `CLAUDE.md`; each step is built in small pieces.
 
 ## Current status
 
-- **Roadmap step:** 3 done; 4 next (replace order → inventory call with RabbitMQ events)
-- **Next piece:** step 4, piece 1 — RabbitMQ in Compose + event envelope in `shared/`
-  (new infrastructure: confirm with the user before adding)
+- **Roadmap step:** 4 in progress (replace order → inventory call with RabbitMQ events)
+- **Next piece:** step 4, piece 2 — order publishes `OrderCreated`; wire `shared/` into
+  order's image
 - **Last updated:** 2026-11-11
 
 ## Step 1 — Catalog service
@@ -61,7 +61,7 @@ Draft plan; adjust as we go. Outbox and Notification are step 5.
 
 | #  | Piece                                                                 | Status  | Commit    |
 |----|-----------------------------------------------------------------------|---------|-----------|
-| 1  | RabbitMQ in Compose (ask first: new infrastructure), event envelope in `shared/` | planned | |
+| 1  | RabbitMQ in Compose (approved 2026-11-11), event envelope in `shared/` | done |           |
 | 2  | Order publishes `OrderCreated`; `POST /orders` answers 202 with a PENDING order | planned | |
 | 3  | Inventory consumes `OrderCreated`, reserves, publishes `StockReserved` / `StockFailed` | planned | |
 | 4  | Order consumes the replies → CONFIRMED / CANCELLED, publishes `OrderConfirmed` / `OrderCancelled` | planned | |
@@ -221,6 +221,19 @@ Bigger choices go in `docs/decisions/` as ADRs; smaller ones are noted here.
   (lost answer, nobody notices). 6 simultaneous orders for 2 copies → exactly 2 confirmed.
   Leftover PENDING orders and reservations from these tests are in the local DBs;
   `docker compose down -v` resets everything.
+- RabbitMQ (approved by the user 2026-11-11): image `rabbitmq:4-management-alpine`
+  (4.4), Compose service `rabbitmq`, fixed `hostname` so its data folder in the
+  `rabbitmq-data` volume is found again after a restart. Only the dashboard is published
+  (http://localhost:15672, user/password `chapter-one` by default); services will use
+  `rabbitmq:5672` inside Compose. One broker user for all services for now.
+- Event envelope: `shared/events.py` — a frozen pydantic model `EventEnvelope`
+  (camelCase JSON, refuses unknown fields, times without timezone, `version < 1`),
+  `new_event()`, `to_json()`/`from_json()`, the exchange name and event type constants.
+  The envelope doesn't check the payload; each consumer validates its own.
+  `eventId` and `correlationId` are UUIDs.
+- `shared/` has its own tests and venv (`cd shared && pytest`). Plan for getting it into
+  images: Compose's `build.additional_contexts` hands `shared/` to a service's build
+  as an extra folder, so each image still builds from its own folder (piece 2).
 - Migrations run in the container entrypoint. **Must move to a Kubernetes Job or
   initContainer in roadmap step 7** (multiple replicas would race).
 

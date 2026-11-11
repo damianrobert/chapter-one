@@ -1,0 +1,5 @@
+# To test shared/ on its own. Services already have pydantic (via FastAPI); keep this
+# version the same as theirs.
+pydantic==2.14.3
+pytest==9.2.0
+ruff==0.17.3
